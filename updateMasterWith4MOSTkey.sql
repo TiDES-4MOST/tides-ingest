@@ -1,0 +1,1 @@
+UPDATE tides_master SET pk_4most = latest_4most.pk_4most FROM latest_4most WHERE latest_4most.tides_id=tides_master.tides_id;
