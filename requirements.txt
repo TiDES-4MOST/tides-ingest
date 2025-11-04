@@ -1,0 +1,12 @@
+prefect
+prefect-dask
+dask
+distributed
+pandas
+numpy
+PyYAML
+sqlalchemy
+psycopg2-binary
+lasair
+confluent-kafka
+# Note: submit_transients is a local module (not included here)
