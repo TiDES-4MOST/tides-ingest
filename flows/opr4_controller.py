@@ -12,6 +12,8 @@ Usage:
 from prefect import flow, task
 # from prefect_dask import DaskTaskRunner # Optional: for parallel execution
 import yaml
+import os
+from dotenv import load_dotenv
 import opr4_ztf # Import the data source module
 
 # Global config placeholders
@@ -30,12 +32,19 @@ def load_credentials():
     """
     global USERNAME, PASSWORD, SCHEMA, ACCESS_TOKEN
     
-    # TODO: Load credentials from a secure file (e.g., 4mostAPIDetails.yaml)
-    # settings = yaml.load(open('./4mostAPIDetails.yaml'), Loader=yaml.SafeLoader)
-    # USERNAME = settings['connect']['username']
-    # ...
+    # Load credentials from .env
+    load_dotenv()
     
-    print("Loading credentials...")
+    USERNAME = os.getenv('FOURMOST_USERNAME')
+    PASSWORD = os.getenv('FOURMOST_PASSWORD')
+    SCHEMA = os.getenv('FOURMOST_SCHEMA')
+    ACCESS_TOKEN = os.getenv('FOURMOST_ACCESS_TOKEN')
+    
+    # Check if critical credentials are loaded
+    if not all([USERNAME, PASSWORD]):
+        print("Warning: 4MOST credentials not found in .env")
+    
+    print("Loading credentials from environment variables...")
     return None
 
 @task

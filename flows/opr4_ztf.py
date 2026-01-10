@@ -11,7 +11,9 @@ Usage:
 
 import pandas as pd
 import json
-# import lasair  # Uncomment when lasair package is available
+import os
+import lasair  # Uncomment when lasair package is available
+import numpy as np
 
 def connect_lasair():
     """
@@ -20,17 +22,23 @@ def connect_lasair():
     Returns:
         lasair_consumer object: The consumer object to poll for messages.
     """
-    # TODO: Load configuration settings (Topic, Group ID, Token)
-    # topic = ...
-    # group_id = ...
+    # Load configuration settings from environment variables
+    topic = os.getenv('LASAIR_TOPIC')
+    #group_id = os.getenv('LASAIR_GROUP_ID') # TODO: Uncomment for production
+    group_id = 'opr4'+str(np.random.randint(0, 1000))
+    token = os.getenv('LASAIR_TOKEN')
     
-    # TODO: Initialize Lasair consumer
-    # consumer = lasair.lasair_consumer('kafka.lsst.ac.uk:9092', group_id, topic)
-    
-    print("Connecting to Lasair...")
-    return None # Placeholder
+    # Check if credentials are set
+    if not all([topic, group_id, token]):
+        print("Warning: Lasair credentials not full set in .env")
 
-def get_stream_data(consumer):
+    # TODO: Initialize Lasair consumer
+    consumer = lasair.lasair_consumer('kafka.lsst.ac.uk:9092', group_id, topic)
+    
+    print(f"Connecting to Lasair topic {topic} with group {group_id}...")
+    return consumer
+
+def get_latest_batch(consumer):
     """
     Polls the Lasair Kafka stream for new transient events.
 
@@ -40,16 +48,26 @@ def get_stream_data(consumer):
     Returns:
         pd.DataFrame: A DataFrame containing the recent objects from the stream.
     """
-    # TODO: Poll the consumer for messages with a timeout
-    # msg = consumer.poll(timeout=5)
+    recentObjects = pd.DataFrame()
+  
+    while True:
+        msg = consumer.poll(timeout=5) #The kafka poll will wait 5 seconds to hear back. If nothing is delivered the pipeline will end and only objects 
+        if msg is None:
+            print('no more transients')
+            break
+        
+        if msg.error():
+            print(str(msg.error()))
+            break
+        jmsg = json.loads(msg.value())
+        recentObjects = pd.concat([recentObjects,pd.DataFrame(jmsg, columns=jmsg.keys(), index=[0])], ignore_index=True)
+    #print('Length Recent Objects: ', len(recentObjects))
+    if len(recentObjects)!=0:
+        recentUniqueObjects = recentObjects.sort_values("jdmax", ascending = False).drop_duplicates(subset=["objectId"], inplace=False, keep="first")
+    else: recentUniqueObjects = recentObjects
+    #print(recentObjects)
+    return recentUniqueObjects
     
-    # TODO: Handle message errors and empty messages
-    
-    # TODO: Accumulate valid messages into a list or DataFrame
-    # recent_objects = ...
-    
-    print("Polling stream data...")
-    return pd.DataFrame() # Placeholder
 
 def process_transients(raw_data):
     """
@@ -86,9 +104,9 @@ def get_targets():
     consumer = connect_lasair()
     
     # 2. Get the latest batch of data
-    raw_data = get_stream_data(consumer)
+    latest_transients = get_latest_batch(consumer)
     
     # 3. Process and filter the data
-    targets = process_transients(raw_data)
+    targets = process_transients(latest_transients)
     
     return targets
