@@ -317,7 +317,7 @@ import json
 # third-party
 import requests
 from requests.auth import HTTPBasicAuth
-# local
+# local #
 pass
 
 # set up logging functionality
