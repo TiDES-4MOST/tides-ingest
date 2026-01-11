@@ -60,7 +60,8 @@ def get_latest_batch(consumer):
             print(str(msg.error()))
             break
         jmsg = json.loads(msg.value())
-        recentObjects = pd.concat([recentObjects,pd.DataFrame(jmsg, columns=jmsg.keys(), index=[0])], ignore_index=True)
+        mostRecentComm = pd.DataFrame(jmsg, columns=jmsg.keys(), index=[0])
+        recentObjects = pd.concat([recentObjects,mostRecentComm], ignore_index=True)
     #print('Length Recent Objects: ', len(recentObjects))
     if len(recentObjects)!=0:
         recentUniqueObjects = recentObjects.sort_values("jdmax", ascending = False).drop_duplicates(subset=["objectId"], inplace=False, keep="first")
@@ -88,7 +89,7 @@ def process_transients(raw_data):
     #         pass
             
     print("Processing transients...")
-    return [] # Placeholder
+    return raw_data # Placeholder
 
 def get_targets():
     """
@@ -110,3 +111,31 @@ def get_targets():
     targets = process_transients(latest_transients)
     
     return targets
+
+if __name__ == "__main__":
+    from dotenv import load_dotenv
+    def load_credentials():
+        """
+        Loads 4MOST API credentials from a YAML file.
+        
+        This mirrors the 'connect4MOST_API' and 'loadTiDESdbSettings' logic from tidesCom.py.
+        """
+        global USERNAME, PASSWORD, SCHEMA, ACCESS_TOKEN
+        
+        # Load credentials from .env
+        load_dotenv()
+        
+        USERNAME = os.getenv('FOURMOST_USERNAME')
+        PASSWORD = os.getenv('FOURMOST_PASSWORD')
+        SCHEMA = os.getenv('FOURMOST_SCHEMA')
+        ACCESS_TOKEN = os.getenv('FOURMOST_ACCESS_TOKEN')
+        
+        # Check if critical credentials are loaded
+        if not all([USERNAME, PASSWORD]):
+            print("Warning: 4MOST credentials not found in .env")
+        
+        print("Loading credentials from environment variables...")
+        return None
+    load_credentials()
+    targets = get_targets()
+    print(targets)

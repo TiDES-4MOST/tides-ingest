@@ -48,6 +48,31 @@ def load_credentials():
     return None
 
 @task
+def sqlalchemy_credentials_flow():
+    dbUsername = os.getenv('TIDES_DB_USER')
+    dbPassword = os.getenv('TIDES_DB_PASS')
+    dbDatabase = os.getenv('TIDES_DB_DATABASE')
+    sqlalchemy_credentials = DatabaseCredentials(
+        driver=AsyncDriver.POSTGRESQL_ASYNCPG,
+        username=dbUsername,
+        password=dbPassword,
+        database=dbDatabase,
+        host="localhost",
+        port=5432,
+    )
+    print(sqlalchemy_credentials.get_engine())
+    return sqlalchemy_credentials.get_engine()
+
+@task
+def sqlalchmey_engine():
+  dbUsername = os.getenv('TIDES_DB_USER')
+  dbPassword = os.getenv('TIDES_DB_PASS')
+  dbDatabase = os.getenv('TIDES_DB_DATABASE')
+  url = 'postgresql+psycopg2://'+str(dbUsername)+':'+str(dbPassword)+'@localhost:5432/'+str(dbDatabase)
+  engine = sqlalchemy.create_engine(url,future=True)
+  return engine
+
+@task
 def fetch_targets():
     """
     Calls the opr4_ztf module to get the latest list of targets.
@@ -85,11 +110,16 @@ def run_opr4_workflow():
     # 2. Fetch targets from the ZTF stream (via opr4_ztf)
     targets = fetch_targets()
     
-    # 3. Submit viable targets to 4MOST
-    if targets:
-        submit_to_4most(targets)
-    else:
-        print("No targets found to submit.")
+    engine = sqlalchmey_engine() ## Create the connection to the TiDES DB
+
+    createTransientStage(targets, engine) ## Create a temporary table for the recent detections
+    #Starting the session with the local TiDES Database
+    with engine.connect() as conn, conn.begin() :
+        upsertToMaster(conn)
+        deactivateUnobservedTransients(conn)
+        toUpdate = prepare4MOSTUpdate(conn)
+        print('New Transients',len(toUpdate[toUpdate['pk_4most'].isnull()]))
+        print('Updating Transients',len(toUpdate[~toUpdate['pk_4most'].isnull()]))
 
 if __name__ == "__main__":
     run_opr4_workflow()
