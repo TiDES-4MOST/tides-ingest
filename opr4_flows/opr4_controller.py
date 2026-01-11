@@ -73,12 +73,22 @@ def sqlalchmey_engine():
   return engine
 
 @task
-def fetch_targets():
+def fetch_ztf_targets():
     """
     Calls the opr4_ztf module to get the latest list of targets.
     """
     print("Fetching targets from opr4_ztf...")
     targets = opr4_ztf.get_targets()
+    return targets
+
+#TODO: Create LSST module
+@task
+def fetch_lsst_targets():
+    """
+    Calls the opr4_lsst module to get the latest list of targets.
+    """
+    print("Fetching targets from opr4_lsst...")
+    targets = opr4_lsst.get_targets()
     return targets
 
 @task
@@ -107,8 +117,9 @@ def run_opr4_workflow():
     # 1. Load configuration and credentials
     load_credentials()
     
+
     # 2. Fetch targets from the ZTF stream (via opr4_ztf)
-    targets = fetch_targets()
+    ztf_targets = fetch_ztf_targets()
     
     engine = sqlalchmey_engine() ## Create the connection to the TiDES DB
 

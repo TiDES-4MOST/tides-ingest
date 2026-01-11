@@ -23,14 +23,14 @@ def connect_lasair():
         lasair_consumer object: The consumer object to poll for messages.
     """
     # Load configuration settings from environment variables
-    topic = os.getenv('LASAIR_TOPIC')
-    #group_id = os.getenv('LASAIR_GROUP_ID') # TODO: Uncomment for production
+    topic = os.getenv('LASAIR_ZTF_TOPIC')
+    #group_id = os.getenv('LASAIR_ZTF_GROUP_ID') # TODO: Uncomment for production
     group_id = 'opr4'+str(np.random.randint(0, 1000))
-    token = os.getenv('LASAIR_TOKEN')
+    token = os.getenv('LASAIR_ZTF_TOKEN')
     
     # Check if credentials are set
     if not all([topic, group_id, token]):
-        print("Warning: Lasair credentials not full set in .env")
+        print("Warning: Lasair credentials not fully set in .env")
 
     # TODO: Initialize Lasair consumer
     consumer = lasair.lasair_consumer('kafka.lsst.ac.uk:9092', group_id, topic)
