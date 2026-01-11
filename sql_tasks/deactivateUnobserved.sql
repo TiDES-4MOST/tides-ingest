@@ -7,6 +7,7 @@ WHERE active = True
         rmag > 22.5
         and gmag > 22.5
     );
+--- Update the master table to deactivate the objects
 UPDATE tides_master
 SET active = False
 FROM to_deactivate
