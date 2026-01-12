@@ -30,7 +30,7 @@ def connect_lasair():
     
     # Check if credentials are set
     if not all([topic, group_id, token]):
-        print("Warning: Lasair credentials not fully set in .env")
+        print("Warning: Lasair ZTF credentials not fully set in .env")
 
     # TODO: Initialize Lasair consumer
     consumer = lasair.lasair_consumer('kafka.lsst.ac.uk:9092', group_id, topic)
