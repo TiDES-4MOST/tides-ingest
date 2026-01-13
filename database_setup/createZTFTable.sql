@@ -1,4 +1,4 @@
-CREATE TABLE tides_ztf(
+CREATE TABLE IF NOT EXISTS tides_ztf(
     tides_id BIGINT PRIMARY KEY REFERENCES tides_master(tides_id),
     name VARCHAR NOT NULL,
     ra double precision,
