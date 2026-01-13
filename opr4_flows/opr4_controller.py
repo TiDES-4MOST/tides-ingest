@@ -158,7 +158,7 @@ def createNewTransientin4MOST(tableIn):
   for index,row in tableIn.iterrows():
     catDict = row.to_dict()
     #print(catDict['name'])
-    uploadParams = = {
+    uploadParams = {
     "uploadedfor_survey_id": 15,
     "name" : str(catDict['name']),
     "ra": np.float64(catDict['ra']),
