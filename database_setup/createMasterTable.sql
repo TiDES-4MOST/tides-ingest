@@ -10,6 +10,8 @@ CREATE TABLE IF NOT EXISTS tides_master(
     jdmin double precision,
     jdmax double precision,
     jd_obs_trigger double precision,
+    glatest double precision,
+    rlatest double precision,
     latest_mag real,
     active BOOL DEFAULT FALSE,
     created TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
