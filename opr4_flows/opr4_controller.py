@@ -47,30 +47,32 @@ def load_credentials():
     print("Loading credentials from environment variables...")
     return None
 
-@task
-def sqlalchemy_credentials_flow():
-    dbUsername = os.getenv('TIDES_DB_USER')
-    dbPassword = os.getenv('TIDES_DB_PASS')
-    dbDatabase = os.getenv('TIDES_DB_DATABASE')
-    sqlalchemy_credentials = DatabaseCredentials(
-        driver=AsyncDriver.POSTGRESQL_ASYNCPG,
-        username=dbUsername,
-        password=dbPassword,
-        database=dbDatabase,
-        host="localhost",
-        port=5432,
-    )
-    print(sqlalchemy_credentials.get_engine())
-    return sqlalchemy_credentials.get_engine()
+# @task
+# def sqlalchemy_credentials_flow():
+#     dbUsername = os.getenv('TIDES_DB_USER')
+#     dbPassword = os.getenv('TIDES_DB_PASS')
+#     dbDatabase = os.getenv('TIDES_DB_DATABASE')
+#     sqlalchemy_credentials = DatabaseCredentials(
+#         driver=AsyncDriver.POSTGRESQL_ASYNCPG,
+#         username=dbUsername,
+#         password=dbPassword,
+#         database=dbDatabase,
+#         host="localhost",
+#         port=5432,
+#     )
+#     print(sqlalchemy_credentials.get_engine())
+#     return sqlalchemy_credentials.get_engine()
 
 @task
 def sqlalchmey_engine():
-  dbUsername = os.getenv('TIDES_DB_USER')
-  dbPassword = os.getenv('TIDES_DB_PASS')
-  dbDatabase = os.getenv('TIDES_DB_DATABASE')
-  url = 'postgresql+psycopg2://'+str(dbUsername)+':'+str(dbPassword)+'@localhost:5432/'+str(dbDatabase)
-  engine = sqlalchemy.create_engine(url,future=True)
-  return engine
+    dbUsername = os.getenv('TIDES_DB_USER')
+    dbPassword = os.getenv('TIDES_DB_PASS')
+    dbDatabase = os.getenv('TIDES_DB_DATABASE')
+    dbHost = os.getenv('TIDES_DB_HOST')
+    dbPort = os.getenv('TIDES_DB_PORT')
+    url = 'postgresql+psycopg2://'+str(dbUsername)+':'+str(dbPassword)+'@'+str(dbHost)+':'+str(dbPort)+'/'+str(dbDatabase)
+    engine = sqlalchemy.create_engine(url,future=True)
+    return engine
 
 @task
 def fetch_ztf_targets():
@@ -109,11 +111,134 @@ def submit_to_4most(targets):
     print(f"Submitting {len(targets)} targets to 4MOST...")
     pass
 
+@task
+def createTransientStage(dataTable, cnx):
+  dataTable.columns = map(str.lower, dataTable.columns)
+  dataTable[dataTable['pass']==True].to_sql('tides_stage', con=cnx, if_exists='replace', index=False)
+  ## Below is faster when millions of rows, we are not at that stage
+  # dataTable.head(0)to_sql('tides_stage', con=cnx, index=False, if_exists='replace') # head(0) uses only the header
+  # # set index=False to avoid bringing the dataframe index in as a column 
+
+  # raw_con = cnx.raw_connection() # assuming you set up cnx as above
+  # cur  = raw_con.cursor()
+  # out = StringIO()
+
+  # # write just the body of your dataframe to a csv-like file object
+  # dataTable.to_csv(out, sep='\t', header=False, index=False) 
+
+  # out.seek(0) # sets the pointer on the file object to the first line
+  # contents = out.getvalue()
+  # cur.copy_from(out, 'table_name', null="") # copies the contents of the file object into the SQL cursor and sets null values to empty strings
+  # raw_con.commit()
+
+@task
+def upsertToMaster(cnx):
+  query = open('../sql_tasks/upsertTiDESstage.sql', 'r')
+  cnx.execute(sqlalchemy.text(query.read()))
+  query.close()
+
+@task
+def deactivateUnobservedTransients(cnx):
+  query = open('../sql_tasks/deactivateUnobserved.sql')
+  cnx.execute(sqlalchemy.text(query.read()))
+
+@task
+def prepare4MOSTUpdate(cnx):
+  query = open('../sql_tasks/stage4MOSTupdates.sql')
+  updates = pd.read_sql(sqlalchemy.text(query.read()), con=cnx)
+  # row = cnx.execute(sqlalchemy.text(query.read()))
+  # print(row.mappings().all())
+  query.close()
+  return updates
+
+@task
+def createNewTransientin4MOST(tableIn):
+  if len(tableIn)==0:
+    return []
+  for index,row in tableIn.iterrows():
+    catDict = row.to_dict()
+    #print(catDict['name'])
+    uploadParams = = {
+    "uploadedfor_survey_id": 15,
+    "name" : str(catDict['name']),
+    "ra": np.float64(catDict['ra']),
+    "dec": np.float64(catDict['dec']),
+    "pmra": 0.0,
+    "pmdec": 0.0,
+    "epoch": 2000,
+    "resolution": 1,
+    "subsurvey": "tides-sn",
+    "cadence": 1048576,
+    "template": 'SN_spec_specid56_snt1_phase5_redshift0.169.fits',
+    "ruleset": 'tides_snMay2024',
+    # "redshift_estimate": None,
+    # "redshift_error": None,
+    "extent_flag": 0,
+    "extent_parameter": 0,
+    "extent_index": 0,
+    "mag": max(float(catDict['rmag']), float(catDict['rmag'])),
+    # "mag_err": None,
+    "mag_type": "LSST_r_AB",
+    # "reddening": None,
+    # "date_earliest": None,
+    # "date_latest": None,
+    "t_exp_d": 38.0,
+    "t_exp_g": 38.0,
+    "t_exp_b": 10000.,
+    "t_exp_s": 10000.,
+    # "template_redshift": None,
+    # "cal_mag_blue": None,
+    # "cal_mag_green": None,
+    # "cal_mag_red": None,
+    # "cal_mag_err_blue": None,
+    # "cal_mag_err_blue": None,
+    # "cal_mag_err_green": None,
+    # "cal_mag_id_green": None,
+    # "cal_mag_id_red": None,
+    # "cal_mag_id_red": None,
+    "classification": "TRA",
+    # "completeness": None,
+    # "parallax": None,
+    "is_active": True,
+    }
+    
+    #print(uploadParams)
+    uppedObject = st.create_transient(data=uploadParams, printout=False) 
+    #print(uppedObject)
+    tableIn.loc[index,'pk_4most'] = np.int64(uppedObject['id'])
+  return tableIn
+
+@task
+def updateExisitingTransient(tableIn):
+  if len(tableIn)==0:
+    return []
+  for index,row in tableIn.iterrows():
+    catDict = row.to_dict()
+    #print(catDict['name'])
+    uploadParams = {
+    "is_active": catDict['active']}
+
+    print(catDict['pk_4most'])
+    updatedObject = st.update_transient(pk=int(catDict['pk_4most']), data=uploadParams, printout=False) 
+
+@task
+def updateTiDESMasterwith4MOSTKey(newTable, cnx):
+  newTable.columns = map(str.lower, newTable.columns)
+  newTable['pk_4most'] = newTable['pk_4most'].astype(int).copy()
+  newTable.to_sql('latest_4most', con=cnx, if_exists='replace', index=False)
+  query = open('../sql_tasks/updateMasterWith4MOSTkey.sql')
+  updates = cnx.execute(sqlalchemy.text(query.read()))
+  # row = cnx.execute(sqlalchemy.text(query.read()))
+  # print(row.mappings().all())
+  query.close()
+
 @flow(name="OPR4 Workflow")
 def run_opr4_workflow():
     """
     The main Prefect flow for the OPR4 process.
     """
+    neededTargetColumns = ['objectId','ra', 'dec', 'jdmin', 'jdmax', 'gmag', 'rmag']
+    
     # 1. Load configuration and credentials
     load_credentials()
     
@@ -121,16 +246,56 @@ def run_opr4_workflow():
     # 2. Fetch targets from the ZTF stream (via opr4_ztf)
     ztf_targets = fetch_ztf_targets()
     
+    # Rename 'decl' to 'dec' if it exists
+    # Lasair won't let you have dec as a column name, so I have decl.
+    # But we need dec for the master table.
+    if 'decl' in ztf_targets.columns:
+        ztf_targets.rename(columns={'decl': 'dec'}, inplace=True)
+    
+    ## If adding LSST, do it here, returning a DataFrame 
+    
+    #Trim the targets to the columns needed for the master table
+    ztf4master = ztf_targets[neededTargetColumns]
+
+    ## Combine all the targets into a single DataFrame
+    ## If adding LSST, do it here
+    allTargets = pd.concat([ztf4master]) ## Combine all targets into a single DataFrame
+
+    if len(allTargets) == 0:
+        print('!!! No Transients !!!')
+        return None
+    print('All transients: ', len(allTargets))
+    # 3. Check whether objects Pass addition slection criteria
+    # and add a column 'pass' to the DataFrame
+    # e.g. allTargets['pass'] = allTargets.apply(lambda row: row['gmag'] < 22 and row['rmag'] < 22, axis=1)
+    # TODO: Add selection criteria
+    # For now, just pass everything
+    allTargets['pass'] = True
+
+    
     engine = sqlalchmey_engine() ## Create the connection to the TiDES DB
 
-    createTransientStage(targets, engine) ## Create a temporary table for the recent detections
-    #Starting the session with the local TiDES Database
+    # 4. Let's start doing Database tasks
+    createTransientStage(allTargets, engine) ## Create a temporary table for the recent detections
+
+    #Starting the session with the TiDES Database
     with engine.connect() as conn, conn.begin() :
         upsertToMaster(conn)
         deactivateUnobservedTransients(conn)
         toUpdate = prepare4MOSTUpdate(conn)
         print('New Transients',len(toUpdate[toUpdate['pk_4most'].isnull()]))
         print('Updating Transients',len(toUpdate[~toUpdate['pk_4most'].isnull()]))
+
+        newTransients = createNewTransientin4MOST(toUpdate[toUpdate['pk_4most'].isnull()])
+        updatedTransients = updateExisitingTransient(toUpdate[~toUpdate['pk_4most'].isnull()])
+        #print(newTransients)
+        if len(newTransients)==0:
+            print('No new transients to send to 4MOST')
+            return None
+        else:
+            updateTiDESMasterwith4MOSTKey(newTransients, conn)
+
+
 
 if __name__ == "__main__":
     run_opr4_workflow()

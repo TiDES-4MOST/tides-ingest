@@ -67,6 +67,7 @@ def get_latest_batch(consumer):
         recentUniqueObjects = recentObjects.sort_values("jdmax", ascending = False).drop_duplicates(subset=["objectId"], inplace=False, keep="first")
     else: recentUniqueObjects = recentObjects
     #print(recentObjects)
+    
     return recentUniqueObjects
     
 
@@ -109,6 +110,7 @@ def get_targets():
     
     # 3. Process and filter the data
     targets = process_transients(latest_transients)
+
     
     return targets
 
