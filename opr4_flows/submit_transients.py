@@ -281,7 +281,7 @@ but you wouldn't pick up the first one if you check against UTC:
 
 --
 
-Copyright (c) 2023 Jacob Laas <jclaas@mpe.mpg.de> & 4MOST <4most.eu>
+Copyright (c) 2026 Jacob Laas <jclaas@mpe.mpg.de> & 4MOST <4most.eu>
 Distributed under the MIT license:
 
 Permission is hereby granted, free of charge, to any person obtaining a copy
@@ -317,7 +317,7 @@ import json
 # third-party
 import requests
 from requests.auth import HTTPBasicAuth
-# local #
+# local
 pass
 
 # set up logging functionality
@@ -332,6 +332,7 @@ log.info("**** STARTING A NEW SESSION (PID: %s) ****" % os.getpid())
 ### define parameters and client
 # URL_SCHEMA = "http://127.0.0.1:8080/targetCat/transients/"
 URL_SCHEMA = "https://4most.mpe.mpg.de/QFSwi/targetCat/transients/"
+DEFAULT_MAX_ITEMS = 10
 USERNAME = None
 PASSWORD = None
 ACCESS_TOKEN = None
@@ -406,7 +407,7 @@ def modified_payload(payload=None):
         payload = dict(payload)  # to avoid modifying the original
     # update with a new name
     payload.update({
-        "name":datetime.datetime.now().strftime(format="%Y%m%d %H%M%S")
+        "name": datetime.datetime.now().strftime(format="%Y%m%d %H%M%S.%f").replace(".", " ")
     })
     # return it
     return payload
@@ -437,7 +438,7 @@ def get_session(username=USERNAME, password=PASSWORD, token=ACCESS_TOKEN):
         s.headers.update({"Authorization": "Token %s" % (token,)})
     return s
 
-def check_request(request=None, caller="(caller N/A)", printout=False):
+def check_request(request=None, caller="(caller N/A)", printout=False, return_mode=None):
     """
     Processes the results of the request.
 
@@ -457,33 +458,43 @@ def check_request(request=None, caller="(caller N/A)", printout=False):
     """
     if request is None:
         return
+    if return_mode == "raw":
+        return request
+    status_ok = request.status_code in (requests.codes.ok, 204)
     try:
-        if request.status_code in (requests.codes.ok, 204):
-            msg = f"{caller} ran successfully"
+        if status_ok:
             try:
-                results = json.loads(request.text)
-                if "err" in results:
-                    raise Exception(f"retrieved an ERROR: {results['err']}")
-                if printout:
-                    msg += ": %s" % (results)
-                log.debug(msg)
-                return results
-            except UserWarning:
-                if printout:
-                    msg += ": %s" % (request.text)
-        else:
-            raise Exception(f"{caller} failed with HTTP code {request.status_code}! Response was: {request.text}")
+                parsed = json.loads(request.text) if request.text else None
+                if isinstance(parsed, dict):
+                    parsed = [parsed]
+            except Exception:
+                parsed = None
+            result = parsed if parsed is not None else request.text
+            if printout:
+                log.info(f"{caller} ran successfully: {result}")
+            else:
+                log.debug(f"{caller} ran successfully")
+            return result
+        # error path
+        err_text = None
+        try:
+            parsed_err = json.loads(request.text)
+            if isinstance(parsed_err, dict) and "err" in parsed_err:
+                err_text = str(parsed_err.get("err"))
+            else:
+                err_text = request.text
+        except Exception:
+            err_text = request.text or f"{caller} failed with HTTP code {request.status_code}"
+        log.warning(err_text)
+        return err_text
     except Exception:
         e = sys.exc_info()
-        log.warning(f"{e[1]}")
-        return request
-    log.info(msg)
-    return request.text
-
+        log.warning(f"{caller} encountered an unexpected error: {e[1]}")
+        return str(e[1]) if e[1] else str(e[0])
 
 ### main routines
 
-def get_api_token(printout=True, timeout=15):
+def get_api_token(printout=True, timeout=15, return_mode="listdict"):
     """
     Returns the queried authentication token for the transients API.
 
@@ -522,9 +533,9 @@ def get_api_token(printout=True, timeout=15):
         data={"username": username, "password": password},
         timeout=timeout,
     )
-    return check_request(request=r, caller="get_api_token()", printout=printout)
+    return check_request(request=r, caller="get_api_token()", printout=printout, return_mode=return_mode)
 
-def get_visits(printout=True, timeout=15):
+def get_visits(printout=True, timeout=15, return_mode="listdict"):
     """
     Returns the candidate visits (+ tiles) via the transients API.
 
@@ -553,9 +564,9 @@ def get_visits(printout=True, timeout=15):
         url,
         timeout=timeout,
     )
-    return check_request(request=r, caller="get_visits()", printout=printout)
+    return check_request(request=r, caller="get_visits()", printout=printout, return_mode=return_mode)
 
-def get_options(printout=True, timeout=15):
+def get_options(printout=True, timeout=15, return_mode="listdict"):
     """
     Simply prints (optional) and returns the list of OPTIONS describing
     the API schema.
@@ -581,11 +592,14 @@ def get_options(printout=True, timeout=15):
         url,
         timeout=timeout,
     )
-    results = check_request(request=r, caller="get_options()", printout=printout)
-    pp.pprint(results)
+    results = check_request(request=r, caller="get_options()", printout=printout, return_mode=return_mode)
+    if isinstance(results, (dict, list)):
+        pp.pprint(results)
+    else:
+        print(results)
     return results
 
-def get_list(pk=None, flt=None, timeout=15):
+def get_list(pk=None, flt=None, limit=None, timeout=15, return_mode="listdict"):
     """
     Returns a queried list of transients.
 
@@ -599,6 +613,9 @@ def get_list(pk=None, flt=None, timeout=15):
         the id of an individual transient (if not a set)
     flt : str, optional, default=None
         a (set of) field+lookup pair(s) for applying selection filters
+    limit : int, optional, default=10
+        the maximum number of items to retrieve in a query
+        NOTE: this will not override a filter if you have already set limit=<blah> in the filter itself
     timeout : int or None, optional, default=15
         the timeout to use for the remote connection (if not None, must be number of seconds)
 
@@ -624,12 +641,19 @@ def get_list(pk=None, flt=None, timeout=15):
         url = "%s/%s/" % (url.rstrip("/"), pk)
     if flt is not None:
         url = "%s/?%s" % (url.rstrip("/"), flt)
+    if limit is not None:
+        if flt is None:
+            flt = f"limit={limit}"
+        elif "limit=" in flt:
+            pass
+        else:
+            flt = f"{flt}&limit={limit}"
     session = get_session(username=username, password=password, token=token)
     r = session.get(
         url,
         timeout=timeout,
     )
-    return check_request(request=r, caller="get_list()", printout=False)
+    return check_request(request=r, caller="get_list()", printout=False, return_mode=return_mode)
 
 def show_list(*args, **kwargs):
     """
@@ -641,14 +665,18 @@ def show_list(*args, **kwargs):
     get_list() routine. See its related docstring for more details.
     """
     retrieved_list = get_list(*args, **kwargs)
-    try:
-        pp.pprint(json.loads(retrieved_list))
-    except Exception:
-        print(retrieved_list)
+    if isinstance(retrieved_list, str):
+        try:
+            pp.pprint(json.loads(retrieved_list))
+        except Exception:
+            print(retrieved_list)
+    else:
+        pp.pprint(retrieved_list)
 
 def create_transient(data=None, printout=True,
                      no_single_quotes=False,
-                     timeout=15):
+                     timeout=15,
+                     return_mode="listdict"):
     """
     Submits a new transient.
 
@@ -699,13 +727,14 @@ def create_transient(data=None, printout=True,
         json=data,
         timeout=timeout,
     )
-    return check_request(request=r, caller="create_transient()", printout=printout)
+    return check_request(request=r, caller="create_transient()", printout=printout, return_mode=return_mode)
 
 def update_transient(pk=None,
                      data=None,
                      printout=True,
                      no_single_quotes=False,
-                     timeout=15):
+                     timeout=15,
+                     return_mode="listdict"):
     """
     Updates a current transient with new data. Note that this routine uses
     strictly the PATCH method to provide a partial update to a transient,
@@ -749,11 +778,11 @@ def update_transient(pk=None,
     r = session.patch(
         url,
         json=data,
-        timeout=15,
+        timeout=timeout,
     )
-    return check_request(request=r, caller="update_transient()", printout=printout)
+    return check_request(request=r, caller="update_transient()", printout=printout, return_mode=return_mode)
 
-def delete_transient(pk=None, printout=True, timeout=15):
+def delete_transient(pk=None, printout=True, timeout=15, return_mode="listdict"):
     """
     Deletes a current transient.
 
@@ -789,11 +818,11 @@ def delete_transient(pk=None, printout=True, timeout=15):
         url,
         timeout=timeout,
     )
-    return check_request(request=r, caller="delete_transient()", printout=printout)
+    return check_request(request=r, caller="delete_transient()", printout=printout, return_mode=return_mode)
 
 ### test routine(s)
 
-def test_multi_simul(timeout=15):
+def test_multi_simul(timeout=15, return_mode="text"):
     """
     Bulds and submits TWO transients at once. (development/testing only)
 
@@ -806,17 +835,23 @@ def test_multi_simul(timeout=15):
     multiple_transients = []
     multiple_transients.append(modified_payload())
     multiple_transients.append(modified_payload())
+    assert len(multiple_transients) == 2
     log.debug("payload: %s" % (multiple_transients,))
     # submit all at once
+    time_submission = datetime.datetime.now()
     timer_submission_start = timer()
-    create_transient(data=multiple_transients, timeout=timeout)
+    result = create_transient(data=multiple_transients, timeout=timeout, return_mode=return_mode)
+    print("\n\n\n\n\nretrieved from create_transient():", result, "\ntype:", type(result), "\n")
+
     timer_submission_stop = timer()
     time_to_submit = timer_submission_stop - timer_submission_start
     # try to catch them
-    time_now = datetime.datetime.now()
-    time_submission = time_now - datetime.timedelta(seconds=30)
     time_submission_str = time_submission.strftime("%Y-%m-%dT%H:%M:%S")
     log.debug("time_submission_str: %s" % (time_submission_str,))
+    result = get_list(flt=f"date_submitted__gt={time_submission_str}", return_mode=return_mode)
+
+    print("\n\n\n\n\nretrieved from get_list():", result, "\ntype:", type(result), "\n")
+
     show_list(flt="date_submitted__gt=%s" % (time_submission_str,))
 
 def run_test():
@@ -877,6 +912,10 @@ if __name__ == '__main__':
         "--filter", type=str, default=None,
         help="sets a filter (field+lookuptype) to the URL schema (list-only!)"
     )
+    parser.add_argument(
+        "--limit", type=100, default=DEFAULT_MAX_ITEMS,
+        help=f"limits a list query to a maximum number of items (list-only!) (default: {DEFAULT_MAX_ITEMS})"
+    )
     # standard actions
     parser.add_argument(
         "--request-token", action='store_true',
@@ -919,6 +958,10 @@ if __name__ == '__main__':
         "--runtest", action='store_true',
         help="(dev only) launch the run_test() routine instead of the standard routines"
     )
+    parser.add_argument(
+        "--return-mode", type=str, default="json", choices=("json", "listdict", "raw", "text"),
+        help="controls returned data: default is 'json' (CLI) or 'listdict' (python) on success (string on error), 'raw'=requests.Response, 'text'=raw body"
+    )
 
     ### parse arguments
     args = parser.parse_args()
@@ -960,23 +1003,26 @@ if __name__ == '__main__':
     if args.runtest:
         run_test()
     if args.request_token:
-        get_api_token(timeout=args.timeout)
+        get_api_token(timeout=args.timeout, return_mode=args.return_mode)
     elif args.get_visits:
-        get_visits(timeout=args.timeout)
+        get_visits(timeout=args.timeout, return_mode=args.return_mode)
     elif args.options:
-        get_options(timeout=args.timeout)
+        get_options(timeout=args.timeout, return_mode=args.return_mode)
     elif args.list:
-        show_list(pk=args.id, flt=args.filter, timeout=args.timeout)
+        show_list(pk=args.id, flt=args.filter, limit=args.limit, timeout=args.timeout, return_mode=args.return_mode)
     elif args.create:
         create_transient(data=args.data,
                          no_single_quotes=args.no_single_quotes,
-                         timeout=args.timeout)
+                         timeout=args.timeout,
+                         return_mode=args.return_mode)
     elif args.update:
         update_transient(pk=args.update, data=args.data,
                          no_single_quotes=args.no_single_quotes,
-                         timeout=args.timeout)
+                         timeout=args.timeout,
+                         return_mode=args.return_mode)
     elif args.delete:
         delete_transient(pk=args.delete,
-                         timeout=args.timeout)
+                         timeout=args.timeout,
+                         return_mode=args.return_mode)
 
     sys.exit()
