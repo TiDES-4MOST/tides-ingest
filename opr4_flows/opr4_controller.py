@@ -18,6 +18,7 @@ import opr4_ztf # Import the data source module
 import pandas as pd
 import numpy as np
 import sqlalchemy
+from prefect.cache_policies import NO_CACHE
 
 # Global config placeholders
 # 4MOST API Credentials
@@ -66,7 +67,7 @@ def load_credentials():
 #     print(sqlalchemy_credentials.get_engine())
 #     return sqlalchemy_credentials.get_engine()
 
-@task
+@task(cache_policy=NO_CACHE)
 def sqlalchmey_engine():
     dbUsername = os.getenv('TIDES_DB_USER')
     dbPassword = os.getenv('TIDES_DB_PASS')
@@ -77,7 +78,7 @@ def sqlalchmey_engine():
     engine = sqlalchemy.create_engine(url,future=True)
     return engine
 
-@task
+@task(cache_policy=NO_CACHE)
 def fetch_ztf_targets():
     """
     Calls the opr4_ztf module to get the latest list of targets.
@@ -87,7 +88,7 @@ def fetch_ztf_targets():
     return targets
 
 #TODO: Create LSST module
-@task
+@task(cache_policy=NO_CACHE)
 def fetch_lsst_targets():
     """
     Calls the opr4_lsst module to get the latest list of targets.
@@ -96,7 +97,7 @@ def fetch_lsst_targets():
     targets = opr4_lsst.get_targets()
     return targets
 
-@task
+@task(cache_policy=NO_CACHE)
 def submit_to_4most(targets):
     """
     Iterates through the targets and submits them to the 4MOST facility.
@@ -114,7 +115,7 @@ def submit_to_4most(targets):
     print(f"Submitting {len(targets)} targets to 4MOST...")
     pass
 
-@task
+@task(cache_policy=NO_CACHE)
 def createTransientStage(dataTable, cnx):
   dataTable.columns = map(str.lower, dataTable.columns)
   dataTable[dataTable['pass']==True].to_sql('tides_stage', con=cnx, if_exists='replace', index=False)
@@ -134,18 +135,18 @@ def createTransientStage(dataTable, cnx):
   # cur.copy_from(out, 'table_name', null="") # copies the contents of the file object into the SQL cursor and sets null values to empty strings
   # raw_con.commit()
 
-@task
+@task(cache_policy=NO_CACHE)
 def upsertToMaster(cnx):
   query = open('../sql_tasks/upsertTiDESstage.sql', 'r')
   cnx.execute(sqlalchemy.text(query.read()))
   query.close()
 
-@task
+@task(cache_policy=NO_CACHE)
 def deactivateUnobservedTransients(cnx):
   query = open('../sql_tasks/deactivateUnobserved.sql')
   cnx.execute(sqlalchemy.text(query.read()))
 
-@task
+@task(cache_policy=NO_CACHE)
 def prepare4MOSTUpdate(cnx):
   query = open('../sql_tasks/stage4MOSTupdates.sql')
   updates = pd.read_sql(sqlalchemy.text(query.read()), con=cnx)
@@ -154,7 +155,7 @@ def prepare4MOSTUpdate(cnx):
   query.close()
   return updates
 
-@task
+@task(cache_policy=NO_CACHE)
 def createNewTransientin4MOST(tableIn):
   if len(tableIn)==0:
     return []
@@ -211,7 +212,7 @@ def createNewTransientin4MOST(tableIn):
     tableIn.loc[index,'pk_4most'] = np.int64(uppedObject['id'])
   return tableIn
 
-@task
+@task(cache_policy=NO_CACHE)
 def updateExisitingTransient(tableIn):
   if len(tableIn)==0:
     return []
@@ -224,7 +225,7 @@ def updateExisitingTransient(tableIn):
     print(catDict['pk_4most'])
     updatedObject = st.update_transient(pk=int(catDict['pk_4most']), data=uploadParams, printout=False) 
 
-@task
+@task(cache_policy=NO_CACHE)
 def updateTiDESMasterwith4MOSTKey(newTable, cnx):
   newTable.columns = map(str.lower, newTable.columns)
   newTable['pk_4most'] = newTable['pk_4most'].astype(int).copy()
