@@ -1,4 +1,4 @@
-MERGE INTO tides_master tm USING tides_stage ts ON q3c_radial_query(ts.ra, ts.dec, tm.ra, tm.dec, 0.000277778);
+MERGE INTO tides_master tm USING tides_stage ts ON q3c_radial_query(ts.ra, ts.dec, tm.ra, tm.dec, 0.000277778)
 WHEN MATCHED THEN
 UPDATE
 set jdmax = ts.jdmax,
