@@ -17,6 +17,7 @@ from dotenv import load_dotenv
 import opr4_ztf # Import the data source module
 import pandas as pd
 import numpy as np
+import sqlalchemy
 
 # Global config placeholders
 # 4MOST API Credentials
