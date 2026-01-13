@@ -1,6 +1,8 @@
 CREATE TABLE IF NOT EXISTS tides_master(
     tides_id BIGSERIAL PRIMARY KEY,
     pk_4most BIGINT default null,
+    ostd_targ_id BIGINT default null,
+    ostd_u_obj_id BIGINT default null,
     name VARCHAR NOT NULL,
     ra double precision,
     dec double precision,
