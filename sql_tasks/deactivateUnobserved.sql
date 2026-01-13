@@ -4,8 +4,8 @@ FROM tides_master
 WHERE active = True
     AND updated < now() - interval '5days'
     OR (
-        rmag > 22.5
-        and gmag > 22.5
+        rlatest > 22.5
+        and glatest > 22.5
     );
 --- Update the master table to deactivate the objects
 UPDATE tides_master
