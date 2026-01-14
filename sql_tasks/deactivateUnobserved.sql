@@ -12,5 +12,5 @@ UPDATE tides_master
 SET active = False
 FROM to_deactivate
 WHERE to_deactivate.tides_id = tides_master.tides_id
-RETURNING tm.tides_id,
-    tm.active;
+RETURNING tides_master.tides_id,
+    tides_master.active;
