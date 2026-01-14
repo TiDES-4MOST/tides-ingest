@@ -219,7 +219,7 @@ def createNewTransientin4MOST(tableIn):
     
     #print(uploadParams)
     uppedObject = st.create_transient(data=uploadParams, printout=False) 
-    #print(uppedObject)
+    print(uppedObject)
     tableIn.loc[index,'pk_4most'] = np.int64(uppedObject['id'])
   return tableIn
 
