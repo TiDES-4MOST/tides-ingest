@@ -311,7 +311,8 @@ def run_opr4_workflow():
         print(toUpdate)
         print('New Transients',len(toUpdate[toUpdate['pk_4most'].isnull()]))
         print('Updating Transients',len(toUpdate[~toUpdate['pk_4most'].isnull()]))
-
+        #TODO: Better error reporting below when things don't go well
+        #Perhaps put a try/except in and then report the error in a prefect log
         newTransients = createNewTransientin4MOST(toUpdate[toUpdate['pk_4most'].isnull()])
         updatedTransients = updateExisitingTransient(toUpdate[~toUpdate['pk_4most'].isnull()])
         #print(newTransients)
