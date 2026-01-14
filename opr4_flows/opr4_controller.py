@@ -146,7 +146,7 @@ def upsertToMaster(cnx):
   upsertStage.to_sql('tides_stage2', con=cnx, if_exists='replace', index=False)
   print('Upserted data', upsertStage)
 
-  query.close()
+  #query.close()
   return upsertStage
 
 @task(cache_policy=NO_CACHE)
@@ -160,7 +160,7 @@ def prepare4MOSTUpdate(cnx):
   updates = pd.read_sql(sqlalchemy.text(query.read()), con=cnx)
   # row = cnx.execute(sqlalchemy.text(query.read()))
   # print(row.mappings().all())
-  query.close()
+  #query.close()
   return updates
 
 @task(cache_policy=NO_CACHE)
@@ -188,7 +188,7 @@ def createNewTransientin4MOST(tableIn):
     "extent_flag": 0,
     "extent_parameter": 0,
     "extent_index": 0,
-    "mag": min(float(catDict['rmaglatest']), float(catDict['gmaglatest'])),
+    "mag": min(float(catDict['rlatest']), float(catDict['glatest'])),
     # "mag_err": None,
     "mag_type": "LSST_r_AB",
     # "reddening": None,
