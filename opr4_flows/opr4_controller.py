@@ -144,9 +144,9 @@ def upsertToMaster(cnx):
   # Convert to pandas DataFrame
   upsertStage = pd.DataFrame(result)
   upsertStage.to_sql('tides_stage', con=cnx, if_exists='replace', index=False)
-  #print('Upserted data', upsertStage)
+  print('Upserted data', upsertStage)
 
-  query.close()
+  #query.close()
   return upsertStage
 
 @task(cache_policy=NO_CACHE)
