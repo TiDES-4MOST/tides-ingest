@@ -313,11 +313,21 @@ def run_opr4_workflow():
         print('Updating Transients',len(toUpdate[~toUpdate['pk_4most'].isnull()]))
         #TODO: Better error reporting below when things don't go well
         #Perhaps put a try/except in and then report the error in a prefect log
-        newTransients = createNewTransientin4MOST(toUpdate[toUpdate['pk_4most'].isnull()])
-        updatedTransients = updateExisitingTransient(toUpdate[~toUpdate['pk_4most'].isnull()])
-        #print(newTransients)
-        if len(newTransients)==0:
+        if len(toUpdate[toUpdate['pk_4most'].isnull()])>0:
+            print('Sending new {} transients to 4MOST'.format(len(toUpdate[toUpdate['pk_4most'].isnull()])))
+            newTransients = createNewTransientin4MOST(toUpdate[toUpdate['pk_4most'].isnull()])
+        else:
             print('No new transients to send to 4MOST')
+            newTransients = []
+        
+        if len(toUpdate[~toUpdate['pk_4most'].isnull()])>0:
+            print('Updating {} transients in 4MOST'.format(len(toUpdate[~toUpdate['pk_4most'].isnull()])))
+            updatedTransients = updateExisitingTransient(toUpdate[~toUpdate['pk_4most'].isnull()])
+        else:
+            print('No transients to update in 4MOST')
+            updatedTransients = []
+        #print(newTransients)
+        if len(newTransients)==0:            
             return None
         else:
             updateTiDESMasterwith4MOSTKey(newTransients, conn)
