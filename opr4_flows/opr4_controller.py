@@ -143,7 +143,7 @@ def upsertToMaster(cnx):
   
   # Convert to pandas DataFrame
   upsertStage = pd.DataFrame(result)
-  upsertStage.to_sql('tides_stage', con=cnx, if_exists='replace', index=False)
+  upsertStage.to_sql('tides_stage2', con=cnx, if_exists='replace', index=False)
   print('Upserted data', upsertStage)
 
   #query.close()
@@ -188,7 +188,7 @@ def createNewTransientin4MOST(tableIn):
     "extent_flag": 0,
     "extent_parameter": 0,
     "extent_index": 0,
-    "mag": max(float(catDict['rmag']), float(catDict['rmag'])),
+    "mag": min(float(catDict['rmaglatest']), float(catDict['gmaglatest'])),
     # "mag_err": None,
     "mag_type": "LSST_r_AB",
     # "reddening": None,

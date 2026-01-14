@@ -2,7 +2,7 @@ SELECT *
 from tides_master
 where tides_master.tides_id in (
         select tides_id
-        from tides_stage
+        from tides_stage2
     )
     or tides_master.tides_id in (
         select tides_id
