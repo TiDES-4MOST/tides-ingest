@@ -40,11 +40,16 @@ def load_credentials():
     # Load credentials from .env
     load_dotenv()
     
-    st.USERNAME = os.getenv('FOURMOST_USERNAME')
-    st.PASSWORD = os.getenv('FOURMOST_PASSWORD')
-    st.SCHEMA = os.getenv('FOURMOST_SCHEMA')
-    st.ACCESS_TOKEN = os.getenv('FOURMOST_ACCESS_TOKEN')
+    USERNAME = os.getenv('FOURMOST_USERNAME')
+    PASSWORD = os.getenv('FOURMOST_PASSWORD')
+    SCHEMA = os.getenv('FOURMOST_SCHEMA')
+    ACCESS_TOKEN = os.getenv('FOURMOST_ACCESS_TOKEN')
     
+    st.USERNAME = USERNAME
+    st.PASSWORD = PASSWORD
+    st.SCHEMA = SCHEMA
+    st.ACCESS_TOKEN = ACCESS_TOKEN
+
     # Check if critical credentials are loaded
     if not all([USERNAME, PASSWORD]):
         print("Warning: 4MOST credentials not found in .env")
