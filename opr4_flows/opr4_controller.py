@@ -23,10 +23,10 @@ import submit_transients as st
 
 # Global config placeholders
 # 4MOST API Credentials
-USERNAME = None
-PASSWORD = None
-SCHEMA = None
-ACCESS_TOKEN = None
+# USERNAME = None
+# PASSWORD = None
+# SCHEMA = None
+# ACCESS_TOKEN = None
 
 @task
 def load_credentials():
@@ -144,11 +144,13 @@ def upsertToMaster(cnx):
   
   # Convert to pandas DataFrame
   upsertStage = pd.DataFrame(result)
-  upsertStage.to_sql('tides_stage', con=cnx, if_exists='replace', index=False)
+  return upsertStage
+
+@task(cache_policy=NO_CACHE)
+def upsertStaged2(upsertStage,cnx):
+  upsertStage.to_sql('tides_stage2', con=cnx, if_exists='replace', index=False)
   print('Upserted data', upsertStage)
 
-  #query.close()
-  return upsertStage
 
 @task(cache_policy=NO_CACHE)
 def deactivateUnobservedTransients(cnx):
@@ -293,7 +295,8 @@ def run_opr4_workflow():
 
     #Starting the session with the TiDES Database
     with engine.connect() as conn, conn.begin() :
-        upsertToMaster(conn)
+        upsertedData = upsertToMaster(conn)
+        upsertStaged2(upsertedData,conn)
         deactivateUnobservedTransients(conn)
         toUpdate = prepare4MOSTUpdate(conn)
         print(toUpdate)
