@@ -161,7 +161,13 @@ def upsertStaged2(upsertStage,cnx):
 @task(cache_policy=NO_CACHE)
 def deactivateUnobservedTransients(cnx):
   query = open('../sql_tasks/deactivateUnobserved.sql')
-  cnx.execute(sqlalchemy.text(query.read()))
+  dataReturned = cnx.execute(sqlalchemy.text(query.read()))
+  result = dataReturned.mappings().all()
+  
+  # Convert to pandas DataFrame
+  deactivated = pd.DataFrame(result)
+  print(deactivated)
+  return deactivated
 
 @task(cache_policy=NO_CACHE)
 def prepare4MOSTUpdate(cnx):
@@ -306,7 +312,7 @@ def run_opr4_workflow():
     
     upsertStaged2(upsertedData,engine)
     with engine.connect() as conn, conn.begin() :
-        deactivateUnobservedTransients(conn)
+        deactivate_TiDES_IDsdeactivateUnobservedTransients(conn)
         toUpdate = prepare4MOSTUpdate(conn)
         print(toUpdate)
         print('New Transients',len(toUpdate[toUpdate['pk_4most'].isnull()]))
