@@ -313,6 +313,7 @@ def run_opr4_workflow():
     upsertStaged2(upsertedData,engine)
     with engine.connect() as conn, conn.begin() :
         deactivate_TiDES_IDs = deactivateUnobservedTransients(conn)
+        print(deactivate_TiDES_IDs)
         toUpdate = prepare4MOSTUpdate(conn)
         print(toUpdate)
         print('Deactivated Transients',len(deactivate_TiDES_IDs))
