@@ -146,7 +146,7 @@ def upsertToMaster(cnx):
   upsertStage.to_sql('tides_stage2', con=cnx, if_exists='replace', index=False)
   print('Upserted data', upsertStage)
 
-  #query.close()
+  query.close()
   return upsertStage
 
 @task(cache_policy=NO_CACHE)
