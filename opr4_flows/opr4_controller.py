@@ -295,6 +295,7 @@ def run_opr4_workflow():
         upsertToMaster(conn)
         deactivateUnobservedTransients(conn)
         toUpdate = prepare4MOSTUpdate(conn)
+        print(toUpdate)
         print('New Transients',len(toUpdate[toUpdate['pk_4most'].isnull()]))
         print('Updating Transients',len(toUpdate[~toUpdate['pk_4most'].isnull()]))
 
