@@ -138,8 +138,10 @@ def createTransientStage(dataTable, cnx):
 @task(cache_policy=NO_CACHE)
 def upsertToMaster(cnx):
   query = open('../sql_tasks/upsertTiDESstage.sql', 'r')
-  cnx.execute(sqlalchemy.text(query.read()))
+  dataReturned = cnx.execute(sqlalchemy.text(query.read()))
   query.close()
+  print('Returned data', dataReturned)
+  return dataReturned
 
 @task(cache_policy=NO_CACHE)
 def deactivateUnobservedTransients(cnx):
