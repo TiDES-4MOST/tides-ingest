@@ -140,11 +140,14 @@ def upsertToMaster(cnx):
   query = open('../sql_tasks/upsertTiDESstage.sql', 'r')
   dataReturned = cnx.execute(sqlalchemy.text(query.read()))
   result = dataReturned.mappings().all()
-  query.close()
+  
   # Convert to pandas DataFrame
-  df = pd.DataFrame(result)
-  print('Returned data', df)
-  return df
+  upsertStage = pd.DataFrame(result)
+  upsertStage.to_sql('tides_stage', con=cnx, if_exists='replace', index=False)
+  #print('Upserted data', upsertStage)
+
+  query.close()
+  return upsertStage
 
 @task(cache_policy=NO_CACHE)
 def deactivateUnobservedTransients(cnx):
