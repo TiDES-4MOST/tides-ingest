@@ -19,6 +19,7 @@ import pandas as pd
 import numpy as np
 import sqlalchemy
 from prefect.cache_policies import NO_CACHE
+import submit_transients as st
 
 # Global config placeholders
 # 4MOST API Credentials
@@ -143,7 +144,7 @@ def upsertToMaster(cnx):
   
   # Convert to pandas DataFrame
   upsertStage = pd.DataFrame(result)
-  upsertStage.to_sql('tides_stage2', con=cnx, if_exists='replace', index=False)
+  upsertStage.to_sql('tides_stage', con=cnx, if_exists='replace', index=False)
   print('Upserted data', upsertStage)
 
   #query.close()
