@@ -20,6 +20,7 @@ import numpy as np
 import sqlalchemy
 from prefect.cache_policies import NO_CACHE
 import submit_transients as st
+import json 
 
 # Global config placeholders
 # 4MOST API Credentials
@@ -223,10 +224,9 @@ def createNewTransientin4MOST(tableIn):
     }
     
     #print(uploadParams)
-    uppedObject = st.create_transient(data=uploadParams, printout=False) 
-    print("!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!")
-    print(uppedObject)
-    print("!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!")
+    uppedObjectJSONstring = st.create_transient(data=uploadParams, printout=False) 
+    uppedObject = json.loads(uppedObjectJSONstring)
+    
     tableIn.loc[index,'pk_4most'] = np.int64(uppedObject['id'])
   return tableIn
 
