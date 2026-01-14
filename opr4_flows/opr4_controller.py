@@ -225,8 +225,8 @@ def createNewTransientin4MOST(tableIn):
     
     #print(uploadParams)
     uppedObjectJSONstring = st.create_transient(data=uploadParams, printout=False) 
-    uppedObject = json.loads(uppedObjectJSONstring)
-    
+    uppedObjectJSON = json.loads(uppedObjectJSONstring)
+    uppedObject = pd.DataFrame(uppedObjectJSON)
     tableIn.loc[index,'pk_4most'] = np.int64(uppedObject['id'])
   return tableIn
 
