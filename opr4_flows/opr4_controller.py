@@ -296,7 +296,9 @@ def run_opr4_workflow():
     #Starting the session with the TiDES Database
     with engine.connect() as conn, conn.begin() :
         upsertedData = upsertToMaster(conn)
-        upsertStaged2(upsertedData,engine)
+    
+    upsertStaged2(upsertedData,engine)
+    with engine.connect() as conn, conn.begin() :
         deactivateUnobservedTransients(conn)
         toUpdate = prepare4MOSTUpdate(conn)
         print(toUpdate)
