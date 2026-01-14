@@ -7,5 +7,7 @@ where tides_master.tides_id in (
     or tides_master.tides_id in (
         select tides_id
         from to_deactivate
-    );
+    )
+RETURNING tides_id,
+    active;
 -- TODO: join stage and master on ra, dec rather than name

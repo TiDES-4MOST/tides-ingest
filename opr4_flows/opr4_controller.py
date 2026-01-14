@@ -312,9 +312,10 @@ def run_opr4_workflow():
     
     upsertStaged2(upsertedData,engine)
     with engine.connect() as conn, conn.begin() :
-        deactivate_TiDES_IDsdeactivateUnobservedTransients(conn)
+        deactivate_TiDES_IDs = deactivateUnobservedTransients(conn)
         toUpdate = prepare4MOSTUpdate(conn)
         print(toUpdate)
+        print('Deactivated Transients',len(deactivate_TiDES_IDs))
         print('New Transients',len(toUpdate[toUpdate['pk_4most'].isnull()]))
         print('Updating Transients',len(toUpdate[~toUpdate['pk_4most'].isnull()]))
         #TODO: Better error reporting below when things don't go well
