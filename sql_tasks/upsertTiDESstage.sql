@@ -30,4 +30,5 @@ VALUES (
         True,
         CURRENT_TIMESTAMP,
         CURRENT_TIMESTAMP
-    );
+    )
+RETURNING tm.*;
