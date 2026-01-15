@@ -325,6 +325,7 @@ def run_opr4_workflow():
 
         upsertedData = upsertToMaster(conn) ## Upsert Recent data into the master table
         print(upsertedData.columns)
+        print(upsertedData[['tides_id','old_status','active']])
         #TODO: Make this a TEMP TABLE like in createTransientStage
         sys.exit()
         upsertStaged2(upsertedData,engine) ## Upsert the recent data into the staged2 table
