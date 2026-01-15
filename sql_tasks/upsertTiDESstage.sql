@@ -49,7 +49,7 @@ inserted_rows AS (
 ),
 joinedOldNew AS (
     SELECT updated_rows.*,
-        old_data.active as old_active
+        old_data.old_status
     FROM updated_rows,
         old_data
     WHERE updated_rows.tides_id = old_data.tides_id
@@ -58,5 +58,5 @@ SELECT *
 FROM joinedOldNew
 UNION ALL
 SELECT *,
-    NULL as old_active
+    NULL as old_status
 FROM inserted_rows;
