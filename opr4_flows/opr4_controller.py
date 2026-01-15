@@ -174,7 +174,7 @@ def upsertStaged2(upsertStage,cnx):
     upsertStage.columns = map(str.lower, upsertStage.columns)
     cols_with_types = ", ".join([f"{name} {map_dtype(dtype)}" for name, dtype in upsertStage.dtypes.items()])
     cnx.execute(sqlalchemy.text(f"CREATE TEMPORARY TABLE tides_stage2 ({cols_with_types})"))
-    upsertStage.to_sql('tides_stage2', con=cnx, if_exists='replace', index=False)
+    upsertStage.to_sql('tides_stage2', con=cnx, if_exists='append', index=False)
     print('Upserted Stage 2data', upsertStage)
 
 
