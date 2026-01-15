@@ -20,7 +20,9 @@ import numpy as np
 import sqlalchemy
 from prefect.cache_policies import NO_CACHE
 import submit_transients as st
-import json 
+import json
+import duckdb
+import sys
 
 # Global config placeholders
 # 4MOST API Credentials
@@ -122,25 +124,37 @@ def submit_to_4most(targets):
     print(f"Submitting {len(targets)} targets to 4MOST...")
     pass
 
+def map_dtype(dtype):
+    if np.issubdtype(dtype, np.integer):
+        return "INTEGER"
+    if np.issubdtype(dtype, np.floating):
+        return "DOUBLE PRECISION"
+    if np.issubdtype(dtype, np.datetime64):
+        return "TIMESTAMP"
+    return "TEXT"
+
 @task(cache_policy=NO_CACHE)
 def createTransientStage(dataTable, cnx):
-  dataTable.columns = map(str.lower, dataTable.columns)
-  dataTable[dataTable['pass']==True].to_sql('tides_stage', con=cnx, if_exists='replace', index=False)
-  ## Below is faster when millions of rows, we are not at that stage
-  # dataTable.head(0)to_sql('tides_stage', con=cnx, index=False, if_exists='replace') # head(0) uses only the header
-  # # set index=False to avoid bringing the dataframe index in as a column 
+    
+    dataTable.columns = map(str.lower, dataTable.columns)
+    cols_with_types = ", ".join([f"{name} {map_dtype(dtype)}" for name, dtype in dataTable.dtypes.items()])
+    cnx.execute(text(f"CREATE TEMPORARY TABLE tides_stage ({cols_with_types})"))
+    dataTable[dataTable['pass']==True].to_sql('tides_stage', con=cnx, if_exists='append', index=False)
+    ## Below is faster when millions of rows, we are not at that stage
+    # dataTable.head(0)to_sql('tides_stage', con=cnx, index=False, if_exists='replace') # head(0) uses only the header
+    # # set index=False to avoid bringing the dataframe index in as a column 
 
-  # raw_con = cnx.raw_connection() # assuming you set up cnx as above
-  # cur  = raw_con.cursor()
-  # out = StringIO()
+    # raw_con = cnx.raw_connection() # assuming you set up cnx as above
+    # cur  = raw_con.cursor()
+    # out = StringIO()
 
-  # # write just the body of your dataframe to a csv-like file object
-  # dataTable.to_csv(out, sep='\t', header=False, index=False) 
+    # # write just the body of your dataframe to a csv-like file object
+    # dataTable.to_csv(out, sep='\t', header=False, index=False) 
 
-  # out.seek(0) # sets the pointer on the file object to the first line
-  # contents = out.getvalue()
-  # cur.copy_from(out, 'table_name', null="") # copies the contents of the file object into the SQL cursor and sets null values to empty strings
-  # raw_con.commit()
+    # out.seek(0) # sets the pointer on the file object to the first line
+    # contents = out.getvalue()
+    # cur.copy_from(out, 'table_name', null="") # copies the contents of the file object into the SQL cursor and sets null values to empty strings
+    # raw_con.commit()
 
 @task(cache_policy=NO_CACHE)
 def upsertToMaster(cnx):
@@ -304,14 +318,17 @@ def run_opr4_workflow():
     engine = sqlalchmey_engine() ## Create the connection to the TiDES DB
 
     # 4. Let's start doing Database tasks
-    createTransientStage(allTargets, engine) ## Create a temporary table for the recent detections
 
-    #Starting the session with the TiDES Database
     with engine.connect() as conn, conn.begin() :
-        upsertedData = upsertToMaster(conn)
+
+        createTransientStage(allTargets, conn) ## Create a temporary table for the recent detections
+
+        upsertedData = upsertToMaster(conn) ## Upsert Recent data into the master table
+        print(upsertedData)
+        #TODO: Make this a TEMP TABLE like in createTransientStage
+        sys.exit()
+        upsertStaged2(upsertedData,engine) ## Upsert the recent data into the staged2 table
     
-    upsertStaged2(upsertedData,engine)
-    with engine.connect() as conn, conn.begin() :
         deactivate_TiDES_IDs = deactivateUnobservedTransients(conn)
         print(deactivate_TiDES_IDs)
         toUpdate = prepare4MOSTUpdate(conn)
