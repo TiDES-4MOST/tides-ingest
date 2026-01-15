@@ -23,6 +23,7 @@ import submit_transients as st
 import json
 import duckdb
 import sys
+from pandas.api import types
 
 # Global config placeholders
 # 4MOST API Credentials
@@ -124,13 +125,15 @@ def submit_to_4most(targets):
     print(f"Submitting {len(targets)} targets to 4MOST...")
     pass
 
-def map_dtype(dtype):
-    if np.issubdtype(dtype, np.integer):
+def map_dtype(series):
+    if types.is_integer_dtype(series):
         return "INTEGER"
-    if np.issubdtype(dtype, np.floating):
+    if types.is_float_dtype(series):
         return "DOUBLE PRECISION"
-    if np.issubdtype(dtype, np.datetime64):
+    if types.is_datetime64_any_dtype(series):  # Handles both naive and aware
         return "TIMESTAMP"
+    if types.is_bool_dtype(series):
+        return "BOOLEAN"
     return "TEXT"
 
 @task(cache_policy=NO_CACHE)
