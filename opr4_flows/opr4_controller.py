@@ -178,16 +178,16 @@ def upsertStaged2(upsertStage,cnx):
     print('Upserted Stage 2data', upsertStage)
 
 
-@task(cache_policy=NO_CACHE)
-def deactivateUnobservedTransients(cnx):
-  query = open('../sql_tasks/deactivateUnobserved.sql')
-  dataReturned = cnx.execute(sqlalchemy.text(query.read()))
-  result = dataReturned.mappings().all()
+# @task(cache_policy=NO_CACHE)
+# def deactivateUnobservedTransients(cnx):
+#   query = open('../sql_tasks/deactivateUnobserved.sql')
+#   dataReturned = cnx.execute(sqlalchemy.text(query.read()))
+#   result = dataReturned.mappings().all()
   
-  # Convert to pandas DataFrame
-  deactivated = pd.DataFrame(result)
-  print(deactivated)
-  return deactivated
+#   # Convert to pandas DataFrame
+#   deactivated = pd.DataFrame(result)
+#   print(deactivated)
+#   return deactivated
 
 @task(cache_policy=NO_CACHE)
 def prepare4MOSTUpdate(cnx):
@@ -268,6 +268,7 @@ def updateExisitingTransient(tableIn):
 
     print(catDict['pk_4most'])
     updatedObject = st.update_transient(pk=int(catDict['pk_4most']), data=uploadParams, printout=False) 
+    print('Updated:', updatedObject)
 
 @task(cache_policy=NO_CACHE)
 def updateTiDESMasterwith4MOSTKey(newTable, cnx):
@@ -338,8 +339,8 @@ def run_opr4_workflow():
         print('Change State',id_ChangeState)
         #upsertStaged2(upsertedData,conn) ## Upsert the recent data into the staged2 table
                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                               
-        deactivate_TiDES_IDs = deactivateUnobservedTransients(conn)
-
+        deactivate_TiDES_IDs_All = deactivateUnobservedTransients(conn)
+        deactivate_TiDES_IDs = deactivate_TiDES_IDs_All[~deactivate_TiDES_IDs_All['pk_4most'].isnull()]
         
         print(deactivate_TiDES_IDs)
         
@@ -354,7 +355,7 @@ def run_opr4_workflow():
         #print('Updating Transients',len(upsertedData[upsertedData['pk_4most'].notnull()]))
         #TODO: Better error reporting below when things don't go well
         #Perhaps put a try/except in and then report the error in a prefect log
-        sys.exit()
+
         if len(upsertedData[upsertedData['pk_4most'].isnull()])>0:
             print('Sending new {} transients to 4MOST'.format(len(upsertedData[upsertedData['pk_4most'].isnull()])))
             newTransients = createNewTransientin4MOST(upsertedData[upsertedData['pk_4most'].isnull()])
@@ -362,13 +363,21 @@ def run_opr4_workflow():
             print('No new transients to send to 4MOST')
             newTransients = []
         
-        if len(toUpdate[~toUpdate['pk_4most'].isnull()])>0:
-            print('Updating {} transients in 4MOST'.format(len(toUpdate[~toUpdate['pk_4most'].isnull()])))
-            updatedTransients = updateExisitingTransient(toUpdate[~toUpdate['pk_4most'].isnull()])
+        if len(deactivate_TiDES_IDs)>0:
+            print('Deactivating {} transients in 4MOST'.format(len(deactivate_TiDES_IDs)))
+            deactivatedTransients = updateExisitingTransient(deactivate_TiDES_IDs)
+        else:
+            print('No transients to deactivate in 4MOST')
+            deactivatedTransients = []
+        
+        if len(id_ChangeState)>0:
+            print('Updating {} transients in 4MOST due to False->True state change'.format(len(id_ChangeState)))
+            updatedTransients = updateExisitingTransient(id_ChangeState)
         else:
             print('No transients to update in 4MOST')
             updatedTransients = []
         #print(newTransients)
+        sys.exit()
         if len(newTransients)==0:            
             return None
         else:
