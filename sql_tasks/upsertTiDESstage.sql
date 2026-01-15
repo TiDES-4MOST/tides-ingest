@@ -1,5 +1,5 @@
 WITH old_data AS (
-    SELECT tm.id,
+    SELECT tm.tides_id,
         tm.active AS old_status
     FROM tides_master tm,
         tides_stage ts
@@ -52,7 +52,7 @@ joinedOldNew AS (
         old_data.active as old_active
     FROM updated_rows,
         old_data
-    WHERE updated_rows.id = old_data.id
+    WHERE updated_rows.tides_id = old_data.tides_id
 )
 SELECT *
 FROM joinedOldNew
