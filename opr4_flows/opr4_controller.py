@@ -340,8 +340,9 @@ def run_opr4_workflow():
         sys.exit()
         deactivate_TiDES_IDs = deactivateUnobservedTransients(conn)
 
-        sys.exit()
+        
         print(deactivate_TiDES_IDs)
+        sys.exit()
         toUpdate = prepare4MOSTUpdate(conn)
         print(toUpdate)
         print('Deactivated Transients',len(deactivate_TiDES_IDs))
