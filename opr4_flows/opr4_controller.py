@@ -178,16 +178,16 @@ def upsertStaged2(upsertStage,cnx):
     print('Upserted Stage 2data', upsertStage)
 
 
-# @task(cache_policy=NO_CACHE)
-# def deactivateUnobservedTransients(cnx):
-#   query = open('../sql_tasks/deactivateUnobserved.sql')
-#   dataReturned = cnx.execute(sqlalchemy.text(query.read()))
-#   result = dataReturned.mappings().all()
+@task(cache_policy=NO_CACHE)
+def deactivateUnobservedTransients(cnx):
+  query = open('../sql_tasks/deactivateUnobserved.sql')
+  dataReturned = cnx.execute(sqlalchemy.text(query.read()))
+  result = dataReturned.mappings().all()
   
-#   # Convert to pandas DataFrame
-#   deactivated = pd.DataFrame(result)
-#   print(deactivated)
-#   return deactivated
+  # Convert to pandas DataFrame
+  deactivated = pd.DataFrame(result)
+  print(deactivated)
+  return deactivated
 
 @task(cache_policy=NO_CACHE)
 def prepare4MOSTUpdate(cnx):
