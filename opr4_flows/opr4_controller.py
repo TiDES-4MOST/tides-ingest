@@ -336,7 +336,7 @@ def run_opr4_workflow():
         id_ChangeState = upsertedData[['tides_id', 'pk_4most']]\
             [(upsertedData['old_status'] != upsertedData['active']) & (upsertedData['pk_4most'].notnull())]
         print('Change State',id_ChangeState)
-        upsertStaged2(upsertedData,engine) ## Upsert the recent data into the staged2 table
+        upsertStaged2(upsertedData,conn) ## Upsert the recent data into the staged2 table
         sys.exit()
         deactivate_TiDES_IDs = deactivateUnobservedTransients(conn)
 
