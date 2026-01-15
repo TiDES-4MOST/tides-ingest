@@ -382,7 +382,7 @@ def run_opr4_workflow():
             print('No transients to update in 4MOST')
             updatedTransients = []
         #print(newTransients)
-        sys.exit()
+        
         if len(newTransients)==0:            
             return None
         else:
