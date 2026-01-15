@@ -340,7 +340,12 @@ def run_opr4_workflow():
         #upsertStaged2(upsertedData,conn) ## Upsert the recent data into the staged2 table
                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                               
         deactivate_TiDES_IDs_All = deactivateUnobservedTransients(conn)
-        deactivate_TiDES_IDs = deactivate_TiDES_IDs_All[~deactivate_TiDES_IDs_All['pk_4most'].isnull()]
+        if len(deactivate_TiDES_IDs_All)>0:
+            deactivate_TiDES_IDs = deactivate_TiDES_IDs_All[~deactivate_TiDES_IDs_All['pk_4most'].isnull()]
+        else:
+            deactivate_TiDES_IDs = []
+            
+        
         
         print(deactivate_TiDES_IDs)
         
