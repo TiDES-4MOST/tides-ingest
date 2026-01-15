@@ -13,4 +13,5 @@ SET active = False
 FROM to_deactivate
 WHERE to_deactivate.tides_id = tides_master.tides_id
 RETURNING tides_master.tides_id,
+    tides_master.pk_4most,
     tides_master.active;

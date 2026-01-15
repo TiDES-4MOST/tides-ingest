@@ -336,23 +336,28 @@ def run_opr4_workflow():
         id_ChangeState = upsertedData[['tides_id', 'pk_4most']]\
             [(upsertedData['old_status'] != upsertedData['active']) & (upsertedData['pk_4most'].notnull())]
         print('Change State',id_ChangeState)
-        upsertStaged2(upsertedData,conn) ## Upsert the recent data into the staged2 table
-
+        #upsertStaged2(upsertedData,conn) ## Upsert the recent data into the staged2 table
+                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                              
         deactivate_TiDES_IDs = deactivateUnobservedTransients(conn)
 
         
         print(deactivate_TiDES_IDs)
         sys.exit()
-        toUpdate = prepare4MOSTUpdate(conn)
-        print(toUpdate)
-        print('Deactivated Transients',len(deactivate_TiDES_IDs))
-        print('New Transients',len(toUpdate[toUpdate['pk_4most'].isnull()]))
-        print('Updating Transients',len(toUpdate[~toUpdate['pk_4most'].isnull()]))
+        # toUpdate = prepare4MOSTUpdate(conn) I don't think we need to do this any more because upserted and deactivate are enough
+        print("!!!!----------------!!!")
+        print('New transients: ', upsertedData[upsertedData['pk_4most'].isnull()])
+        print("!!!!----------------!!!")
+        print('Existing transients with State Change: ', id_ChangeState)
+        print("!!!!----------------!!!")
+        print('Deactivated Transients',deactivate_TiDES_IDs)
+        print("!!!!----------------!!!")
+        #print('Updating Transients',len(upsertedData[upsertedData['pk_4most'].notnull()]))
         #TODO: Better error reporting below when things don't go well
         #Perhaps put a try/except in and then report the error in a prefect log
-        if len(toUpdate[toUpdate['pk_4most'].isnull()])>0:
-            print('Sending new {} transients to 4MOST'.format(len(toUpdate[toUpdate['pk_4most'].isnull()])))
-            newTransients = createNewTransientin4MOST(toUpdate[toUpdate['pk_4most'].isnull()])
+        sys.exit()
+        if len(upsertedData[upsertedData['pk_4most'].isnull()])>0:
+            print('Sending new {} transients to 4MOST'.format(len(upsertedData[upsertedData['pk_4most'].isnull()])))
+            newTransients = createNewTransientin4MOST(upsertedData[upsertedData['pk_4most'].isnull()])
         else:
             print('No new transients to send to 4MOST')
             newTransients = []
