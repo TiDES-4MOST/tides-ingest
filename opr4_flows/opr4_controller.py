@@ -342,7 +342,7 @@ def run_opr4_workflow():
 
         
         print(deactivate_TiDES_IDs)
-        sys.exit()
+        
         # toUpdate = prepare4MOSTUpdate(conn) I don't think we need to do this any more because upserted and deactivate are enough
         print("!!!!----------------!!!")
         print('New transients: ', upsertedData[upsertedData['pk_4most'].isnull()])
