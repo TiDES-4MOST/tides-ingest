@@ -168,8 +168,11 @@ def upsertToMaster(cnx):
 
 @task(cache_policy=NO_CACHE)
 def upsertStaged2(upsertStage,cnx):
-  upsertStage.to_sql('tides_stage2', con=cnx, if_exists='replace', index=False)
-  print('Upserted data', upsertStage)
+    upsertStage.columns = map(str.lower, upsertStage.columns)
+    cols_with_types = ", ".join([f"{name} {map_dtype(dtype)}" for name, dtype in upsertStage.dtypes.items()])
+    cnx.execute(sqlalchemy.text(f"CREATE TEMPORARY TABLE tides_stage2 ({cols_with_types})"))
+    upsertStage.to_sql('tides_stage2', con=cnx, if_exists='replace', index=False)
+    print('Upserted Stage 2data', upsertStage)
 
 
 @task(cache_policy=NO_CACHE)
@@ -325,12 +328,16 @@ def run_opr4_workflow():
 
         upsertedData = upsertToMaster(conn) ## Upsert Recent data into the master table
         print(upsertedData.columns)
-        print(upsertedData[['tides_id','old_status','active']])
-        #TODO: Make this a TEMP TABLE like in createTransientStage
-        sys.exit()
+        print(upsertedData[['tides_id','pk_4most','old_status','active']])
+        
+        id_ChangeState = upsertedData[['tides_id', 'pk_4most']]\
+            [(upsertedData['old_status'] != upsertedData['active']) & (upsertedData['pk_4most'].notnull())]
+        print('Change State',id_ChangeState)
         upsertStaged2(upsertedData,engine) ## Upsert the recent data into the staged2 table
-    
+
         deactivate_TiDES_IDs = deactivateUnobservedTransients(conn)
+
+        sys.exit()
         print(deactivate_TiDES_IDs)
         toUpdate = prepare4MOSTUpdate(conn)
         print(toUpdate)
