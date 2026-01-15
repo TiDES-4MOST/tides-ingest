@@ -324,7 +324,7 @@ def run_opr4_workflow():
         createTransientStage(allTargets, conn) ## Create a temporary table for the recent detections
 
         upsertedData = upsertToMaster(conn) ## Upsert Recent data into the master table
-        print(upsertedData)
+        print(upsertedData.columns)
         #TODO: Make this a TEMP TABLE like in createTransientStage
         sys.exit()
         upsertStaged2(upsertedData,engine) ## Upsert the recent data into the staged2 table
