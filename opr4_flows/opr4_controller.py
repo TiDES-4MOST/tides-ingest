@@ -138,7 +138,7 @@ def createTransientStage(dataTable, cnx):
     
     dataTable.columns = map(str.lower, dataTable.columns)
     cols_with_types = ", ".join([f"{name} {map_dtype(dtype)}" for name, dtype in dataTable.dtypes.items()])
-    cnx.execute(text(f"CREATE TEMPORARY TABLE tides_stage ({cols_with_types})"))
+    cnx.execute(sqlalchemy.text(f"CREATE TEMPORARY TABLE tides_stage ({cols_with_types})"))
     dataTable[dataTable['pass']==True].to_sql('tides_stage', con=cnx, if_exists='append', index=False)
     ## Below is faster when millions of rows, we are not at that stage
     # dataTable.head(0)to_sql('tides_stage', con=cnx, index=False, if_exists='replace') # head(0) uses only the header
