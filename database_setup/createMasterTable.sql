@@ -41,20 +41,21 @@ $$ LANGUAGE plpgsql IMMUTABLE;
 CREATE OR REPLACE FUNCTION trg_fn_generate_tides_name() RETURNS TRIGGER AS $$
 DECLARE current_yy text := to_char(current_date, 'YY');
 last_yy text;
-BEGIN -- Find the year of the most recent record
+BEGIN -- Updated: substring starts at 9 because 'TiDES-SN' is 8 chars long
 SELECT substring(
         name
-        from 6 for 2
+        from 9 for 2
     ) INTO last_yy
 FROM tides_master
 ORDER BY tides_id DESC
 LIMIT 1;
--- If the year has changed, restart the letters at 'aaa'
 IF last_yy IS NOT NULL
 AND last_yy != current_yy THEN PERFORM setval('tides_seq', 0, false);
 END IF;
--- Construct the name: TiDES + YY + Dynamic Letters
-NEW.name := 'TiDES' || current_yy || to_dynamic_alpha(nextval('tides_seq')::int);
+-- Construct the name
+NEW.name := 'TiDES-SN' || current_yy || to_dynamic_alpha(nextval('tides_seq')::int);
 RETURN NEW;
 END;
 $$ LANGUAGE plpgsql;
+CREATE TRIGGER tides_name_auto_generator BEFORE
+INSERT ON tides_master FOR EACH ROW EXECUTE FUNCTION trg_fn_generate_tides_name();

@@ -123,25 +123,39 @@ def submit_to_4most(targets):
     print(f"Submitting {len(targets)} targets to 4MOST...")
     pass
 
+def map_dtype(series):
+    if types.is_integer_dtype(series):
+        return "INTEGER"
+    if types.is_float_dtype(series):
+        return "DOUBLE PRECISION"
+    if types.is_datetime64_any_dtype(series):  # Handles both naive and aware
+        return "TIMESTAMP"
+    if types.is_bool_dtype(series):
+        return "BOOLEAN"
+    return "TEXT"
+
 @task(cache_policy=NO_CACHE)
 def createTransientStage(dataTable, cnx):
-  dataTable.columns = map(str.lower, dataTable.columns)
-  dataTable[dataTable['pass']==True].to_sql('tides_stage', con=cnx, if_exists='replace', index=False)
-  ## Below is faster when millions of rows, we are not at that stage
-  # dataTable.head(0)to_sql('tides_stage', con=cnx, index=False, if_exists='replace') # head(0) uses only the header
-  # # set index=False to avoid bringing the dataframe index in as a column 
+    
+    dataTable.columns = map(str.lower, dataTable.columns)
+    cols_with_types = ", ".join([f"{name} {map_dtype(dtype)}" for name, dtype in dataTable.dtypes.items()])
+    cnx.execute(sqlalchemy.text(f"CREATE TEMPORARY TABLE tides_stage ({cols_with_types})"))
+    dataTable[dataTable['pass']==True].to_sql('tides_stage', con=cnx, if_exists='append', index=False)
+    ## Below is faster when millions of rows, we are not at that stage
+    # dataTable.head(0)to_sql('tides_stage', con=cnx, index=False, if_exists='replace') # head(0) uses only the header
+    # # set index=False to avoid bringing the dataframe index in as a column 
 
-  # raw_con = cnx.raw_connection() # assuming you set up cnx as above
-  # cur  = raw_con.cursor()
-  # out = StringIO()
+    # raw_con = cnx.raw_connection() # assuming you set up cnx as above
+    # cur  = raw_con.cursor()
+    # out = StringIO()
 
-  # # write just the body of your dataframe to a csv-like file object
-  # dataTable.to_csv(out, sep='\t', header=False, index=False) 
+    # # write just the body of your dataframe to a csv-like file object
+    # dataTable.to_csv(out, sep='\t', header=False, index=False) 
 
-  # out.seek(0) # sets the pointer on the file object to the first line
-  # contents = out.getvalue()
-  # cur.copy_from(out, 'table_name', null="") # copies the contents of the file object into the SQL cursor and sets null values to empty strings
-  # raw_con.commit()
+    # out.seek(0) # sets the pointer on the file object to the first line
+    # contents = out.getvalue()
+    # cur.copy_from(out, 'table_name', null="") # copies the contents of the file object into the SQL cursor and sets null values to empty strings
+    # raw_con.commit()
 
 @task(cache_policy=NO_CACHE)
 def upsertToMaster(cnx):
@@ -155,8 +169,11 @@ def upsertToMaster(cnx):
 
 @task(cache_policy=NO_CACHE)
 def upsertStaged2(upsertStage,cnx):
-  upsertStage.to_sql('tides_stage2', con=cnx, if_exists='replace', index=False)
-  print('Upserted data', upsertStage)
+    upsertStage.columns = map(str.lower, upsertStage.columns)
+    cols_with_types = ", ".join([f"{name} {map_dtype(dtype)}" for name, dtype in upsertStage.dtypes.items()])
+    cnx.execute(sqlalchemy.text(f"CREATE TEMPORARY TABLE tides_stage2 ({cols_with_types})"))
+    upsertStage.to_sql('tides_stage2', con=cnx, if_exists='append', index=False)
+    print('Upserted Stage 2data', upsertStage)
 
 
 @task(cache_policy=NO_CACHE)
@@ -249,6 +266,7 @@ def updateExisitingTransient(tableIn):
 
     print(catDict['pk_4most'])
     updatedObject = st.update_transient(pk=int(catDict['pk_4most']), data=uploadParams, printout=False) 
+    print('Updated:', updatedObject)
 
 @task(cache_policy=NO_CACHE)
 def updateTiDESMasterwith4MOSTKey(newTable, cnx):
@@ -305,37 +323,64 @@ def run_opr4_workflow():
     engine = sqlalchmey_engine() ## Create the connection to the TiDES DB
 
     # 4. Let's start doing Database tasks
-    createTransientStage(allTargets, engine) ## Create a temporary table for the recent detections
 
-    #Starting the session with the TiDES Database
     with engine.connect() as conn, conn.begin() :
-        upsertedData = upsertToMaster(conn)
-    
-    upsertStaged2(upsertedData,engine)
-    with engine.connect() as conn, conn.begin() :
-        deactivate_TiDES_IDs = deactivateUnobservedTransients(conn)
+
+        createTransientStage(allTargets, conn) ## Create a temporary table for the recent detections
+
+        upsertedData = upsertToMaster(conn) ## Upsert Recent data into the master table
+        print(upsertedData.columns)
+        print(upsertedData[['tides_id','pk_4most','old_status','active']])
+        
+        id_ChangeState = upsertedData[['tides_id', 'pk_4most']]\
+            [(upsertedData['old_status'] != upsertedData['active']) & (upsertedData['pk_4most'].notnull())]
+        print('Change State',id_ChangeState)
+        #upsertStaged2(upsertedData,conn) ## Upsert the recent data into the staged2 table
+                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                              
+        deactivate_TiDES_IDs_All = deactivateUnobservedTransients(conn)
+        if len(deactivate_TiDES_IDs_All)>0:
+            deactivate_TiDES_IDs = deactivate_TiDES_IDs_All[~deactivate_TiDES_IDs_All['pk_4most'].isnull()]
+        else:
+            deactivate_TiDES_IDs = []
+            
+        
+        
         print(deactivate_TiDES_IDs)
-        toUpdate = prepare4MOSTUpdate(conn)
-        print(toUpdate)
-        print('Deactivated Transients',len(deactivate_TiDES_IDs))
-        print('New Transients',len(toUpdate[toUpdate['pk_4most'].isnull()]))
-        print('Updating Transients',len(toUpdate[~toUpdate['pk_4most'].isnull()]))
+        
+        # toUpdate = prepare4MOSTUpdate(conn) I don't think we need to do this any more because upserted and deactivate are enough
+        print("!!!!----------------!!!")
+        print('New transients: ', upsertedData[upsertedData['pk_4most'].isnull()])
+        print("!!!!----------------!!!")
+        print('Existing transients with State Change: ', id_ChangeState)
+        print("!!!!----------------!!!")
+        print('Deactivated Transients',deactivate_TiDES_IDs)
+        print("!!!!----------------!!!")
+        #print('Updating Transients',len(upsertedData[upsertedData['pk_4most'].notnull()]))
         #TODO: Better error reporting below when things don't go well
         #Perhaps put a try/except in and then report the error in a prefect log
-        if len(toUpdate[toUpdate['pk_4most'].isnull()])>0:
-            print('Sending new {} transients to 4MOST'.format(len(toUpdate[toUpdate['pk_4most'].isnull()])))
-            newTransients = createNewTransientin4MOST(toUpdate[toUpdate['pk_4most'].isnull()])
+
+        if len(upsertedData[upsertedData['pk_4most'].isnull()])>0:
+            print('Sending new {} transients to 4MOST'.format(len(upsertedData[upsertedData['pk_4most'].isnull()])))
+            newTransients = createNewTransientin4MOST(upsertedData[upsertedData['pk_4most'].isnull()])
         else:
             print('No new transients to send to 4MOST')
             newTransients = []
         
-        if len(toUpdate[~toUpdate['pk_4most'].isnull()])>0:
-            print('Updating {} transients in 4MOST'.format(len(toUpdate[~toUpdate['pk_4most'].isnull()])))
-            updatedTransients = updateExisitingTransient(toUpdate[~toUpdate['pk_4most'].isnull()])
+        if len(deactivate_TiDES_IDs)>0:
+            print('Deactivating {} transients in 4MOST'.format(len(deactivate_TiDES_IDs)))
+            deactivatedTransients = updateExisitingTransient(deactivate_TiDES_IDs)
+        else:
+            print('No transients to deactivate in 4MOST')
+            deactivatedTransients = []
+        
+        if len(id_ChangeState)>0:
+            print('Updating {} transients in 4MOST due to False->True state change'.format(len(id_ChangeState)))
+            updatedTransients = updateExisitingTransient(id_ChangeState)
         else:
             print('No transients to update in 4MOST')
             updatedTransients = []
         #print(newTransients)
+        
         if len(newTransients)==0:            
             return None
         else:
