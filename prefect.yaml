@@ -30,7 +30,7 @@ pull:
 # the deployments section allows you to provide configuration for deploying flows
 deployments:
 - name: opr4-deploy
-  version: 0.1
+  version: 1
   tags: []
   description: null
   schedule: {}
