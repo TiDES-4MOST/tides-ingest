@@ -387,7 +387,7 @@ def run_opr4_workflow():
         else:
             updateTiDESMasterwith4MOSTKey(newTransients, conn)
 
-        ir.ingest_report(toUpdate[toUpdate['pk_4most'].isnull()], toUpdate[~toUpdate['pk_4most'].isnull()], deactivate_TiDES_IDs)
+    ir.ingest_report(newTransients, updatedTransients, deactivatedTransients)
 
 
 
