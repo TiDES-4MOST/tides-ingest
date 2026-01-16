@@ -35,4 +35,5 @@ deployments:
       # instead of trying to pull "opr4_ingest" from Docker Hub.
       image_pull_policy: "IfNotPresent" 
       env:
-        PREFECT_API_URL: "{{ $MY_SECRET_API_URL }}"
+        env_file: .env
+        PREFECT_API_URL: "{{ $PREFECT_SECRET_API }}"
