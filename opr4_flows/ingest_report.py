@@ -1,7 +1,9 @@
 from prefect.artifacts import create_markdown_artifact
 import pandas as pd
 from datetime import datetime
+from prefect import task
 
+@task
 def ingest_report(tableNewTransients, tableUpdatedTransients, tableDeactivatedTransients):
     """
     Generates a markdown report for the ingested/updated transients.
