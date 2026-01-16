@@ -310,9 +310,9 @@ def run_opr4_workflow():
     allTargets = pd.concat([ztf4master]) ## Combine all targets into a single DataFrame
 
     if len(allTargets) == 0:
-        print('!!! No Transients !!!')
+        #print('!!! No Transients !!!')
         return None
-    print('All transients: ', len(allTargets))
+    #print('All transients: ', len(allTargets))
     # 3. Check whether objects Pass addition slection criteria
     # and add a column 'pass' to the DataFrame
     # e.g. allTargets['pass'] = allTargets.apply(lambda row: row['gmag'] < 22 and row['rmag'] < 22, axis=1)
@@ -330,12 +330,12 @@ def run_opr4_workflow():
         createTransientStage(allTargets, conn) ## Create a temporary table for the recent detections
 
         upsertedData = upsertToMaster(conn) ## Upsert Recent data into the master table
-        print(upsertedData.columns)
-        print(upsertedData[['tides_id','pk_4most','old_status','active']])
+        #print(upsertedData.columns)
+        #print(upsertedData[['tides_id','pk_4most','old_status','active']])
         
         id_ChangeState = upsertedData[['tides_id', 'pk_4most']]\
             [(upsertedData['old_status'] != upsertedData['active']) & (upsertedData['pk_4most'].notnull())]
-        print('Change State',id_ChangeState)
+        #print('Change State',id_ChangeState)
         #upsertStaged2(upsertedData,conn) ## Upsert the recent data into the staged2 table
                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                               
         deactivate_TiDES_IDs_All = deactivateUnobservedTransients(conn)
@@ -346,39 +346,39 @@ def run_opr4_workflow():
             
         
         
-        print(deactivate_TiDES_IDs)
+        #print(deactivate_TiDES_IDs)
         
         # toUpdate = prepare4MOSTUpdate(conn) I don't think we need to do this any more because upserted and deactivate are enough
-        print("!!!!----------------!!!")
-        print('New transients: ', upsertedData[upsertedData['pk_4most'].isnull()])
-        print("!!!!----------------!!!")
-        print('Existing transients with State Change: ', id_ChangeState)
-        print("!!!!----------------!!!")
-        print('Deactivated Transients',deactivate_TiDES_IDs)
-        print("!!!!----------------!!!")
+        # print("!!!!----------------!!!")
+        # print('New transients: ', upsertedData[upsertedData['pk_4most'].isnull()])
+        # print("!!!!----------------!!!")
+        # print('Existing transients with State Change: ', id_ChangeState)
+        # print("!!!!----------------!!!")
+        # print('Deactivated Transients',deactivate_TiDES_IDs)
+        # print("!!!!----------------!!!")
         #print('Updating Transients',len(upsertedData[upsertedData['pk_4most'].notnull()]))
         #TODO: Better error reporting below when things don't go well
         #Perhaps put a try/except in and then report the error in a prefect log
 
         if len(upsertedData[upsertedData['pk_4most'].isnull()])>0:
-            print('Sending new {} transients to 4MOST'.format(len(upsertedData[upsertedData['pk_4most'].isnull()])))
+            #print('Sending new {} transients to 4MOST'.format(len(upsertedData[upsertedData['pk_4most'].isnull()])))
             newTransients = createNewTransientin4MOST(upsertedData[upsertedData['pk_4most'].isnull()])
         else:
-            print('No new transients to send to 4MOST')
+            #print('No new transients to send to 4MOST')
             newTransients = []
         
         if len(deactivate_TiDES_IDs)>0:
-            print('Deactivating {} transients in 4MOST'.format(len(deactivate_TiDES_IDs)))
+            #print('Deactivating {} transients in 4MOST'.format(len(deactivate_TiDES_IDs)))
             deactivatedTransients = updateExisitingTransient(deactivate_TiDES_IDs)
         else:
-            print('No transients to deactivate in 4MOST')
+            #print('No transients to deactivate in 4MOST')
             deactivatedTransients = []
         
         if len(id_ChangeState)>0:
-            print('Updating {} transients in 4MOST due to False->True state change'.format(len(id_ChangeState)))
+            #print('Updating {} transients in 4MOST due to False->True state change'.format(len(id_ChangeState)))
             updatedTransients = updateExisitingTransient(id_ChangeState)
         else:
-            print('No transients to update in 4MOST')
+            #print('No transients to update in 4MOST')
             updatedTransients = []
         #print(newTransients)
         
