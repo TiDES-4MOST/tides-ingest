@@ -453,9 +453,7 @@ def run_opr4_workflow():
             updatedTransients = []
         #print(newTransients)
         
-        if len(newTransients)==0:            
-            break
-        else:
+        if len(newTransients)>0:            
             updateTiDESMasterwith4MOSTKey(newTransients, conn)
 
     print("Generating report...")
