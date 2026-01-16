@@ -35,4 +35,4 @@ deployments:
       # instead of trying to pull "opr4_ingest" from Docker Hub.
       image_pull_policy: "IfNotPresent" 
       env:
-        PREFECT_API_URL: 'http://admin:2436fibres!@prefect.tides.lsst.ac.uk/api'
+        PREFECT_API_URL: "{{ $MY_SECRET_API_URL }}"
