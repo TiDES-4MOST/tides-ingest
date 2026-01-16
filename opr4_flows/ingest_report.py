@@ -18,22 +18,47 @@ def ingest_report(tableNewTransients, tableUpdatedTransients, tableDeactivatedTr
     markdown_report = f"# TiDES Ingest Report\n"
     markdown_report += f"**Date:** {date_str}\n\n"
 
-    def dataframe_to_markdown(df):
-        if not df is None:
+    def generate_section(title, data, columns=None):
+        # Check if data is a list (and empty) or None
+        if isinstance(data, list):
+            if not data:
+                return ""
+            # If it's a non-empty list, we assume it might be a list of dicts that can be converted
+            # But the user code implies these should be DataFrames. 
+            # If it's a list, let's try to convert it just in case, or ignore if truly just []
             try:
-                return df.to_markdown(index=False, tablefmt="pipe")
+                df = pd.DataFrame(data)
+            except:
+                return ""
+        else:
+            df = data
+
+        # Check if it's a DataFrame and not empty
+        if isinstance(df, pd.DataFrame) and not df.empty:
+            section = f"## {title}\n"
+            
+            # Select columns if provided and they exist
+            if columns:
+                existing_cols = [c for c in columns if c in df.columns]
+                if existing_cols:
+                    df = df[existing_cols]
+            
+            try:
+                section += df.to_markdown(index=False, tablefmt="pipe")
             except ImportError:
-                return df.to_csv(sep="|", index=False)
-        return "_No objects in this category._"
+                section += df.to_csv(sep="|", index=False)
+            
+            return section + "\n\n"
+        
+        return ""
 
-    markdown_report += "## New Transients\n"
-    markdown_report += dataframe_to_markdown(tableNewTransients[['tides_id','pk_4most','name','ra','dec']]) + "\n\n"
+    markdown_report += generate_section("New Transients", tableNewTransients, ['tides_id','pk_4most','name','ra','dec'])
+    markdown_report += generate_section("Updated Transients", tableUpdatedTransients)
+    markdown_report += generate_section("Deactivated Transients", tableDeactivatedTransients)
 
-    markdown_report += "## Updated Transients\n"
-    markdown_report += dataframe_to_markdown(tableUpdatedTransients) + "\n\n"
-
-    markdown_report += "## Deactivated Transients\n"
-    markdown_report += dataframe_to_markdown(tableDeactivatedTransients) + "\n\n"
+    # If report is empty (besides header), mention it
+    if len(markdown_report.split('\n')) <= 4:
+         markdown_report += "_No changes to report._"
 
     # Create the artifact
     artifact_key = f"tides-ingest-report"
