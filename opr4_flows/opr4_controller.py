@@ -454,7 +454,7 @@ def run_opr4_workflow():
         #print(newTransients)
         
         if len(newTransients)==0:            
-            continue
+            break
         else:
             updateTiDESMasterwith4MOSTKey(newTransients, conn)
 
