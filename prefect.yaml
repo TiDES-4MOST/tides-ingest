@@ -1,0 +1,46 @@
+# Welcome to your prefect.yaml file! You can use this file for storing and managing
+# configuration for deploying your flows. We recommend committing this file to source
+# control along with your flow code.
+
+# Generic metadata about this project
+name: tides-ingest
+prefect-version: 3.6.11
+
+# build section allows you to manage and build docker images
+build:
+- prefect_docker.deployments.steps.build_docker_image:
+    id: build_image
+    requires: prefect-docker>=0.3.1
+    image_name: opr4_ingest
+    tag: opr4
+    dockerfile: auto
+
+# push section allows you to manage if and how this project is uploaded to remote locations
+push:
+- prefect_docker.deployments.steps.push_docker_image:
+    requires: prefect-docker>=0.3.1
+    image_name: '{{ build_image.image_name }}'
+    tag: '{{ build_image.tag }}'
+
+# pull section allows you to provide instructions for cloning this project in remote locations
+pull:
+- prefect.deployments.steps.set_working_directory:
+    directory: /opt/prefect/tides-ingest
+
+# the deployments section allows you to provide configuration for deploying flows
+deployments:
+- name: opr4-deploy
+  version: 0.1
+  tags: []
+  description: null
+  schedule: {}
+  flow_name: null
+  entrypoint: "./opr4flow/opr4_controller.py:run_opr4_workflow"
+  parameters: {}
+  work_pool:
+    name: opr4
+    work_queue_name: null
+    job_variables:
+      image: '{{ build_image.image }}'
+      env:
+        PREFECT_API_URL: 'PREFECT_API_URL=http://admin:2436fibres!@prefect.tides.lsst.ac.uk/api'
