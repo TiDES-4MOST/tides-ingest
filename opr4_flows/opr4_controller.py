@@ -160,7 +160,7 @@ def createTransientStage(dataTable, cnx):
 
 @task(cache_policy=NO_CACHE)
 def upsertToMaster(cnx):
-  query = open('../sql_tasks/upsertTiDESstage.sql', 'r')
+  query = open('./sql_tasks/upsertTiDESstage.sql', 'r')
   dataReturned = cnx.execute(sqlalchemy.text(query.read()))
   result = dataReturned.mappings().all()
   
@@ -179,7 +179,7 @@ def upsertStaged2(upsertStage,cnx):
 
 @task(cache_policy=NO_CACHE)
 def deactivateUnobservedTransients(cnx):
-  query = open('../sql_tasks/deactivateUnobserved.sql')
+  query = open('./sql_tasks/deactivateUnobserved.sql')
   dataReturned = cnx.execute(sqlalchemy.text(query.read()))
   result = dataReturned.mappings().all()
   
@@ -190,7 +190,7 @@ def deactivateUnobservedTransients(cnx):
 
 @task(cache_policy=NO_CACHE)
 def prepare4MOSTUpdate(cnx):
-  query = open('../sql_tasks/stage4MOSTupdates.sql')
+  query = open('./sql_tasks/stage4MOSTupdates.sql')
   updates = pd.read_sql(sqlalchemy.text(query.read()), con=cnx)
   # row = cnx.execute(sqlalchemy.text(query.read()))
   # print(row.mappings().all())
@@ -274,7 +274,7 @@ def updateTiDESMasterwith4MOSTKey(newTable, cnx):
   newTable.columns = map(str.lower, newTable.columns)
   newTable['pk_4most'] = newTable['pk_4most'].astype(int).copy()
   newTable.to_sql('latest_4most', con=cnx, if_exists='replace', index=False)
-  query = open('../sql_tasks/updateMasterWith4MOSTkey.sql')
+  query = open('./sql_tasks/updateMasterWith4MOSTkey.sql')
   updates = cnx.execute(sqlalchemy.text(query.read()))
   # row = cnx.execute(sqlalchemy.text(query.read()))
   # print(row.mappings().all())
