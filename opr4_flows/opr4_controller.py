@@ -454,14 +454,14 @@ def run_opr4_workflow():
         #print(newTransients)
         
         if len(newTransients)==0:            
-            return None
+            continue
         else:
             updateTiDESMasterwith4MOSTKey(newTransients, conn)
 
     print("Generating report...")
     ingest_report(newTransients, updatedTransients, deactivatedTransients)
 
-
+    conn.close()
 
 if __name__ == "__main__":
     run_opr4_workflow()
