@@ -309,7 +309,7 @@ import logging, logging.handlers
 import argparse
 import time
 from timeit import default_timer as timer
-#import distutils.version
+import distutils.version
 import traceback as tb
 import datetime
 import pprint
@@ -440,42 +440,58 @@ def get_session(username=USERNAME, password=PASSWORD, token=ACCESS_TOKEN):
 
 def check_request(request=None, caller="(caller N/A)", printout=False, return_mode=None):
     """
-    Processes the results of the request.
+    Processes the results of the request and returns data according to ``return_mode``.
 
-    Parameters
-    ----------
-    request : requests.Request
-        the request of interest
-    caller : str, optional
-        a descriptor for the routine which made the request (for clarifying messages)
-    printout : bool, optional, default=False
-        whether to print the contents of the request during logging (i.e. and not just returning it)
-
-    Returns
-    -------
-    str
-        the contents of the request
+    Supported ``return_mode`` values:
+        - "raw" / "response" : return the original ``requests.Response`` object or text.
+        - "listdict"        : (default) return a list of dicts or a dict as‑is.
+        - "json"            : return a JSON‑encoded ``str`` of the parsed data.
+        - "pp"              : pretty‑print the result (using ``pp.pprint``) and return ``None``.
     """
     if request is None:
-        return
-    if return_mode == "raw":
+        return None
+
+    # “response” bypass any processing
+    if return_mode in ("response", ):
         return request
+    elif return_mode in ("raw", ):
+        return request.text
+
     status_ok = request.status_code in (requests.codes.ok, 204)
+
     try:
         if status_ok:
+            # Try to parse JSON –‑ API returns a dict or a list of dicts
             try:
                 parsed = json.loads(request.text) if request.text else None
                 if isinstance(parsed, dict):
-                    parsed = [parsed]
+                    parsed = [parsed]          # normalise single‑object responses
             except Exception:
                 parsed = None
+
             result = parsed if parsed is not None else request.text
+
+            # ---------- return‑mode handling ----------
+            if return_mode == "pp":
+                # Human‑friendly CLI output
+                if isinstance(result, (dict, list)):
+                    pp.pprint(result)
+                else:
+                    print(result)
+                return None
+
+            if return_mode == "json":
+                # Return a JSON string (useful for programmatic consumption)
+                return json.dumps(result)
+
+            # Default –‑ “listdict” (or any unknown mode)
             if printout:
                 log.info(f"{caller} ran successfully: {result}")
             else:
                 log.debug(f"{caller} ran successfully")
             return result
-        # error path
+
+        # ---------- error path ----------
         err_text = None
         try:
             parsed_err = json.loads(request.text)
@@ -485,8 +501,14 @@ def check_request(request=None, caller="(caller N/A)", printout=False, return_mo
                 err_text = request.text
         except Exception:
             err_text = request.text or f"{caller} failed with HTTP code {request.status_code}"
+
         log.warning(err_text)
+
+        if return_mode == "pp":
+            print(err_text)
+            return None
         return err_text
+
     except Exception:
         e = sys.exc_info()
         log.warning(f"{caller} encountered an unexpected error: {e[1]}")
@@ -592,12 +614,7 @@ def get_options(printout=True, timeout=15, return_mode="listdict"):
         url,
         timeout=timeout,
     )
-    results = check_request(request=r, caller="get_options()", printout=printout, return_mode=return_mode)
-    if isinstance(results, (dict, list)):
-        pp.pprint(results)
-    else:
-        print(results)
-    return results
+    return check_request(request=r, caller="get_options()", printout=printout, return_mode=return_mode)
 
 def get_list(pk=None, flt=None, limit=None, timeout=15, return_mode="listdict"):
     """
@@ -654,24 +671,6 @@ def get_list(pk=None, flt=None, limit=None, timeout=15, return_mode="listdict"):
         timeout=timeout,
     )
     return check_request(request=r, caller="get_list()", printout=False, return_mode=return_mode)
-
-def show_list(*args, **kwargs):
-    """
-    Prints out the queried list of transients. Note that this simply calls
-    get_list() with the same full set of input arguments, and then prints
-    out to the terminal.
-
-    Note that this routine forwards all input arguments to the underying
-    get_list() routine. See its related docstring for more details.
-    """
-    retrieved_list = get_list(*args, **kwargs)
-    if isinstance(retrieved_list, str):
-        try:
-            pp.pprint(json.loads(retrieved_list))
-        except Exception:
-            print(retrieved_list)
-    else:
-        pp.pprint(retrieved_list)
 
 def create_transient(data=None, printout=True,
                      no_single_quotes=False,
@@ -851,8 +850,7 @@ def test_multi_simul(timeout=15, return_mode="text"):
     result = get_list(flt=f"date_submitted__gt={time_submission_str}", return_mode=return_mode)
 
     print("\n\n\n\n\nretrieved from get_list():", result, "\ntype:", type(result), "\n")
-
-    show_list(flt="date_submitted__gt=%s" % (time_submission_str,))
+    return result
 
 def run_test():
     """
@@ -913,7 +911,7 @@ if __name__ == '__main__':
         help="sets a filter (field+lookuptype) to the URL schema (list-only!)"
     )
     parser.add_argument(
-        "--limit", type=100, default=DEFAULT_MAX_ITEMS,
+        "--limit", type=int, default=DEFAULT_MAX_ITEMS,
         help=f"limits a list query to a maximum number of items (list-only!) (default: {DEFAULT_MAX_ITEMS})"
     )
     # standard actions
@@ -959,8 +957,8 @@ if __name__ == '__main__':
         help="(dev only) launch the run_test() routine instead of the standard routines"
     )
     parser.add_argument(
-        "--return-mode", type=str, default="json", choices=("json", "listdict", "raw", "text"),
-        help="controls returned data: default is 'json' (CLI) or 'listdict' (python) on success (string on error), 'raw'=requests.Response, 'text'=raw body"
+        "--return-mode", type=str, default="pp", choices=("json", "listdict", "raw", "response", "pp"),
+        help="controls returned data: default is 'pp' (CLI) or 'listdict' (python) on success (string on error), 'json'=JSON from listdict, 'raw'=raw body, 'response'=requests.Response, 'pp'=Pretty-Print (i.e. returns None)"
     )
 
     ### parse arguments
@@ -1009,7 +1007,7 @@ if __name__ == '__main__':
     elif args.options:
         get_options(timeout=args.timeout, return_mode=args.return_mode)
     elif args.list:
-        show_list(pk=args.id, flt=args.filter, limit=args.limit, timeout=args.timeout, return_mode=args.return_mode)
+        get_list(pk=args.id, flt=args.filter, limit=args.limit, timeout=args.timeout, return_mode=args.return_mode)
     elif args.create:
         create_transient(data=args.data,
                          no_single_quotes=args.no_single_quotes,

@@ -21,6 +21,7 @@ import sqlalchemy
 from prefect.cache_policies import NO_CACHE
 import submit_transients as st
 import json 
+import ingest_report as ir
 
 # Global config placeholders
 # 4MOST API Credentials
@@ -339,6 +340,8 @@ def run_opr4_workflow():
             return None
         else:
             updateTiDESMasterwith4MOSTKey(newTransients, conn)
+
+        ir.ingest_report(toUpdate[toUpdate['pk_4most'].isnull()], toUpdate[~toUpdate['pk_4most'].isnull()], deactivate_TiDES_IDs)
 
 
 
