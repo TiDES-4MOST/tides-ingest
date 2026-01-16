@@ -35,7 +35,7 @@ deployments:
   description: null
   schedule: {}
   flow_name: null
-  entrypoint: "./opr4flow/opr4_controller.py:run_opr4_workflow"
+  entrypoint: "./opr4_flows/opr4_controller.py:run_opr4_workflow"
   parameters: {}
   work_pool:
     name: opr4
