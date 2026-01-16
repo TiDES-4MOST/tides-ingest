@@ -22,6 +22,7 @@ from prefect.cache_policies import NO_CACHE
 import submit_transients as st
 import json 
 import ingest_report as ir
+from pandas.api import types
 
 # Global config placeholders
 # 4MOST API Credentials
