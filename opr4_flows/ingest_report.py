@@ -27,7 +27,7 @@ def ingest_report(tableNewTransients, tableUpdatedTransients, tableDeactivatedTr
         return "_No objects in this category._"
 
     markdown_report += "## New Transients\n"
-    markdown_report += dataframe_to_markdown(tableNewTransients) + "\n\n"
+    markdown_report += dataframe_to_markdown(tableNewTransients[['tides_id','pk_4most','name','ra','dec']]) + "\n\n"
 
     markdown_report += "## Updated Transients\n"
     markdown_report += dataframe_to_markdown(tableUpdatedTransients) + "\n\n"
