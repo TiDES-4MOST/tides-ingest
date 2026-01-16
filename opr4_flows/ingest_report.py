@@ -19,7 +19,7 @@ def ingest_report(tableNewTransients, tableUpdatedTransients, tableDeactivatedTr
     markdown_report += f"**Date:** {date_str}\n\n"
 
     def dataframe_to_markdown(df):
-        if not df.empty:
+        if not df is None:
             try:
                 return df.to_markdown(index=False, tablefmt="pipe")
             except ImportError:
