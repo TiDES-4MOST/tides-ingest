@@ -26,7 +26,7 @@ pull:
 deployments:
 - name: opr4-deploy
   version: "0.1"
-  entrypoint: "./opr4_flows/opr4_controller.py:run_opr4_workflow"
+  entrypoint: "opr4_flows/opr4_controller.py:run_opr4_workflow"
   work_pool:
     name: opr4
     job_variables:
