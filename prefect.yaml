@@ -5,17 +5,18 @@
 # Generic metadata about this project
 name: tides-ingest
 prefect-version: 3.6.11
+# ... (metadata remains the same)
 
 build:
 - prefect_docker.deployments.steps.build_docker_image:
     id: build_image
     requires: prefect-docker>=0.3.1
-    image_name: "opr4-ingest-image" # Give it a unique local name
+    image_name: "opr4_ingest"
     tag: latest
     dockerfile: auto
-    push: false # Do not push anywhere
+    # REMOVED: push: false (this was causing the TypeError)
 
-# Remove or comment out the entire push section
+# REMOVE the push section entirely to ensure no push is attempted
 push: null 
 
 pull:
@@ -30,8 +31,8 @@ deployments:
     name: opr4
     job_variables:
       image: '{{ build_image.image }}'
-      # CRITICAL: Tell the worker NOT to look for this on Docker Hub
+      # CRITICAL: This tells the Docker worker to use your local build
+      # instead of trying to pull "opr4_ingest" from Docker Hub.
       image_pull_policy: "IfNotPresent" 
       env:
-        # Cleaned up the API URL format
         PREFECT_API_URL: 'http://admin:2436fibres!@prefect.tides.lsst.ac.uk/api'
