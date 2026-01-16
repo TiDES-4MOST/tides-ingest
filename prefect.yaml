@@ -14,18 +14,16 @@ build:
     image_name: "prefecthq/prefect:3-python3.12"
     tag: opr4
     dockerfile: auto
+    push: false
 
 # push section allows you to manage if and how this project is uploaded to remote locations
-push:
-- prefect_docker.deployments.steps.push_docker_image:
-    requires: prefect-docker>=0.3.1
-    image_name: '{{ build_image.image_name }}'
-    tag: '{{ build_image.tag }}'
+push: null
+
 
 # pull section allows you to provide instructions for cloning this project in remote locations
-pull:
-- prefect.deployments.steps.set_working_directory:
-    directory: /opt/prefect/tides-ingest
+# pull:
+# - prefect.deployments.steps.set_working_directory:
+#     directory: /opt/prefect/tides-ingest
 
 
 # the deployments section allows you to provide configuration for deploying flows
@@ -44,4 +42,4 @@ deployments:
     job_variables:
       image: '{{ build_image.image }}'
       env:
-        PREFECT_API_URL: 'PREFECT_API_URL=http://admin:2436fibres!@prefect.tides.lsst.ac.uk/api'
+        PREFECT_API_URL: 'http://admin:2436fibres!@prefect.tides.lsst.ac.uk/api'
