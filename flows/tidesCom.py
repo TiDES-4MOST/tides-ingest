@@ -282,6 +282,7 @@ def createNewTransientin4MOST(tableIn):
     catDict = row.to_dict()
     #print(catDict['name'])
     # Validate magnitude before submission; crash on NaN/invalid. Please change this if we should send NaNs as some default value
+    # Currently only on rmag, but could be extended to others if needed
     mag_raw = catDict.get('rmag')
     try:
       mag_val = float(mag_raw)
