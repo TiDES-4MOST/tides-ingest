@@ -281,6 +281,14 @@ def createNewTransientin4MOST(tableIn):
   for index,row in tableIn.iterrows():
     catDict = row.to_dict()
     #print(catDict['name'])
+    # Validate magnitude before submission; crash on NaN/invalid. Please change this if we should send NaNs as some default value
+    mag_raw = catDict.get('rmag')
+    try:
+      mag_val = float(mag_raw)
+    except Exception:
+      raise ValueError(f"Invalid magnitude value for transient {catDict.get('name')}: {mag_raw}")
+    if pd.isna(mag_raw) or np.isnan(mag_val):
+      raise ValueError(f"NaN magnitude for transient {catDict.get('name')} — aborting submission")
     uploadParams = {"uploadedfor_survey_id": 15,
     "name" : str(catDict['name']),
     "ra": np.float64(catDict['ra']),
@@ -294,7 +302,7 @@ def createNewTransientin4MOST(tableIn):
     "ruleset": 'tides_snJuly2022',
     "redshift_estimate": 0.1,"redshift_error": 0,
     "extent_flag": 0,"extent_parameter": 0,"extent_index": 0,
-    "mag": max(float(catDict['rmag']), float(catDict['rmag'])),"mag_err": 0,"mag_type": 'SDSS_r_AB',
+    "mag": mag_val,"mag_err": 0,"mag_type": 'SDSS_r_AB',
     "reddening": 0,
     "date_earliest": np.float64(catDict['jdmax']),"date_latest": np.float64(catDict['jdmax'])+4,
     "t_exp_b": 60.,"t_exp_d": 60.,"t_exp_g": 60.,
@@ -314,6 +322,14 @@ def updateExisitingTransient(tableIn):
   for index,row in tableIn.iterrows():
     catDict = row.to_dict()
     #print(catDict['name'])
+    # Validate magnitude before submission; crash on NaN/invalid
+    mag_raw = catDict.get('rmag')
+    try:
+      mag_val = float(mag_raw)
+    except Exception:
+      raise ValueError(f"Invalid magnitude value for transient {catDict.get('name')}: {mag_raw}")
+    if pd.isna(mag_raw) or np.isnan(mag_val):
+      raise ValueError(f"NaN magnitude for transient {catDict.get('name')} — aborting update")
     uploadParams = {"uploadedfor_survey_id": 15,
     "name" : str(catDict['name']),
     "ra": np.float64(catDict['ra']),
@@ -327,7 +343,7 @@ def updateExisitingTransient(tableIn):
     "ruleset": 'tides_snJuly2022',
     "redshift_estimate": 0.1,"redshift_error": 0,
     "extent_flag": 0,"extent_parameter": 0,"extent_index": 0,
-    "mag": max(float(catDict['rmag']), float(catDict['rmag'])),"mag_err": 0,"mag_type": 'SDSS_r_AB',
+    "mag": mag_val,"mag_err": 0,"mag_type": 'SDSS_r_AB',
     "reddening": 0,
     "date_earliest": np.float64(catDict['jdmax']),"date_latest": np.float64(catDict['jdmax'])+4,
     "t_exp_b": 60.,"t_exp_d": 60.,"t_exp_g": 60.,
