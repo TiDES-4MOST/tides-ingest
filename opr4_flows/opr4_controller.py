@@ -399,8 +399,10 @@ def run_opr4_workflow():
     with engine.connect() as conn, conn.begin() :
 
         createTransientStage(allTargets, conn) ## Create a temporary table for the recent detections
+        conn.commit()
 
         upsertedData = upsertToMaster(conn) ## Upsert Recent data into the master table
+        conn.commit()
         #print(upsertedData.columns)
         #print(upsertedData[['tides_id','pk_4most','old_status','active']])
         
@@ -410,6 +412,7 @@ def run_opr4_workflow():
         #upsertStaged2(upsertedData,conn) ## Upsert the recent data into the staged2 table
                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                               
         deactivate_TiDES_IDs_All = deactivateUnobservedTransients(conn)
+        conn.commit()
         if len(deactivate_TiDES_IDs_All)>0:
             deactivate_TiDES_IDs = deactivate_TiDES_IDs_All[~deactivate_TiDES_IDs_All['pk_4most'].isnull()]
         else:
@@ -455,6 +458,7 @@ def run_opr4_workflow():
         
         if len(newTransients)>0:            
             updateTiDESMasterwith4MOSTKey(newTransients, conn)
+            conn.commit()
 
     print("Generating report...")
     ingest_report(newTransients, updatedTransients, deactivatedTransients)
