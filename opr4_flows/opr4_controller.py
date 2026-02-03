@@ -275,6 +275,15 @@ def createNewTransientin4MOST(tableIn):
   for index,row in tableIn.iterrows():
     catDict = row.to_dict()
     #print(catDict['name'])
+    # Validate magnitudes and compute mag
+    try:
+        r_val = float(catDict.get('rlatest'))
+        g_val = float(catDict.get('glatest'))
+    except Exception:
+        raise ValueError(f"Invalid magnitude(s) for transient {catDict.get('name')}: rlatest={catDict.get('rlatest')}, glatest={catDict.get('glatest')}")
+    if pd.isna(catDict.get('rlatest')) or pd.isna(catDict.get('glatest')) or np.isnan(r_val) or np.isnan(g_val):
+        raise ValueError(f"NaN magnitude for transient {catDict.get('name')} — aborting submission")
+    mag_val = min(r_val, g_val)
     uploadParams = {
     "uploadedfor_survey_id": 15,
     "name" : str(catDict['name']),
@@ -293,7 +302,7 @@ def createNewTransientin4MOST(tableIn):
     "extent_flag": 0,
     "extent_parameter": 0,
     "extent_index": 0,
-    "mag": min(float(catDict['rlatest']), float(catDict['glatest'])),
+    "mag": mag_val,
     # "mag_err": None,
     "mag_type": "LSST_r_AB",
     # "reddening": None,
@@ -396,11 +405,14 @@ def run_opr4_workflow():
 
     # 4. Let's start doing Database tasks
 
-    with engine.connect() as conn, conn.begin() :
+    with engine.connect() as conn:
+        t = conn.begin()
+        createTransientStage(allTargets, conn)
+        t.commit()
 
-        createTransientStage(allTargets, conn) ## Create a temporary table for the recent detections
-
-        upsertedData = upsertToMaster(conn) ## Upsert Recent data into the master table
+        t = conn.begin()
+        upsertedData = upsertToMaster(conn)
+        t.commit()
         #print(upsertedData.columns)
         #print(upsertedData[['tides_id','pk_4most','old_status','active']])
         
@@ -409,7 +421,9 @@ def run_opr4_workflow():
         #print('Change State',id_ChangeState)
         #upsertStaged2(upsertedData,conn) ## Upsert the recent data into the staged2 table
                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                               
+        t = conn.begin()
         deactivate_TiDES_IDs_All = deactivateUnobservedTransients(conn)
+        t.commit()
         if len(deactivate_TiDES_IDs_All)>0:
             deactivate_TiDES_IDs = deactivate_TiDES_IDs_All[~deactivate_TiDES_IDs_All['pk_4most'].isnull()]
         else:
@@ -453,13 +467,15 @@ def run_opr4_workflow():
             updatedTransients = []
         #print(newTransients)
         
-        if len(newTransients)>0:            
+        if len(newTransients)>0:
+            t = conn.begin()
             updateTiDESMasterwith4MOSTKey(newTransients, conn)
+            t.commit()
 
     print("Generating report...")
     ingest_report(newTransients, updatedTransients, deactivatedTransients)
 
-    conn.close()
+    
 
 if __name__ == "__main__":
     run_opr4_workflow()
