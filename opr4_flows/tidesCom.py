@@ -392,20 +392,30 @@ def executeCommPipe():
   createTransientStage(mergedDF, engine) ## Create a temporary table for the recent detections
 
   #Starting the session with the local TiDES Database
-  with engine.connect() as conn, conn.begin() :
+  with engine.connect() as conn:
+    t = conn.begin()
     upsertToMaster(conn)
+    t.commit()
+
+    t = conn.begin()
     deactivateUnobservedTransients(conn)
+    t.commit()
+
+    t = conn.begin()
     toUpdate = prepare4MOSTUpdate(conn)
+    t.commit()
+
     print('New Transients',len(toUpdate[toUpdate['pk_4most'].isnull()]))
     print('Updating Transients',len(toUpdate[~toUpdate['pk_4most'].isnull()]))
     newTransients = createNewTransientin4MOST(toUpdate[toUpdate['pk_4most'].isnull()])
     updatedTransients = updateExisitingTransient(toUpdate[~toUpdate['pk_4most'].isnull()])
-    #print(newTransients)
     if len(newTransients)==0:
       print('No new transients to send to 4MOST')
       return None
     else:
+      t = conn.begin()
       updateTiDESMasterwith4MOSTKey(newTransients, conn)
+      t.commit()
     
 
   
