@@ -24,8 +24,8 @@ def connect_lasair():
     """
     # Load configuration settings from environment variables
     topic = os.getenv('LASAIR_ZTF_TOPIC')
-    group_id = os.getenv('LASAIR_ZTF_GROUP_ID') # TODO: Uncomment for production
-    #group_id = 'opr4'+str(np.random.randint(0, 1000))
+    #group_id = os.getenv('LASAIR_ZTF_GROUP_ID') # TODO: Uncomment for production
+    group_id = 'opr4'+str(np.random.randint(0, 1000))
     token = os.getenv('LASAIR_ZTF_TOKEN')
     
     # Check if credentials are set

@@ -396,7 +396,7 @@ def run_opr4_workflow():
 
     # 4. Let's start doing Database tasks
 
-    with engine.connect() as conn, conn.begin() :
+    with engine.connect() as conn:
 
         createTransientStage(allTargets, conn) ## Create a temporary table for the recent detections
         conn.commit()
