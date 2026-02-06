@@ -60,13 +60,14 @@ def get_latest_batch(consumer):
             print(str(msg.error()))
             break
         jmsg = json.loads(msg.value())
+        print('jmsg: ',jmsg)
         mostRecentComm = pd.DataFrame(jmsg, columns=jmsg.keys(), index=[0])
         recentObjects = pd.concat([recentObjects,mostRecentComm], ignore_index=True)
     #print('Length Recent Objects: ', len(recentObjects))
     if len(recentObjects)!=0:
         recentUniqueObjects = recentObjects.sort_values("jdmax", ascending = False).drop_duplicates(subset=["objectId"], inplace=False, keep="first")
     else: recentUniqueObjects = recentObjects
-    #print(recentObjects)
+    print('Recent ZTF Object: ',recentObjects)
 
     return recentUniqueObjects
     
