@@ -275,6 +275,12 @@ def createNewTransientin4MOST(tableIn):
   for index,row in tableIn.iterrows():
     catDict = row.to_dict()
     #print(catDict['name'])
+    
+    r_val = float(catDict['rlatest'])
+    g_val = float(catDict['glatest'])
+    if np.isnan(r_val): r_val = 29.99
+    if np.isnan(g_val): g_val = 29.99
+    
     uploadParams = {
     "uploadedfor_survey_id": 15,
     "name" : str(catDict['name']),
@@ -293,7 +299,7 @@ def createNewTransientin4MOST(tableIn):
     "extent_flag": 0,
     "extent_parameter": 0,
     "extent_index": 0,
-    "mag": min(float(catDict['rlatest']), float(catDict['glatest'])),
+    "mag": min(r_val, g_val),
     # "mag_err": None,
     "mag_type": "LSST_r_AB",
     # "reddening": None,
@@ -361,24 +367,31 @@ def run_opr4_workflow():
     # 1. Load configuration and credentials
     load_credentials()
     
+    allSourceSurveys =[] #This will hold the different source survey tables to be concatenated later
 
     # 2. Fetch targets from the ZTF stream (via opr4_ztf)
     ztf_targets = fetch_ztf_targets()
     
-    # Rename 'decl' to 'dec' if it exists
-    # Lasair won't let you have dec as a column name, so I have decl.
-    # But we need dec for the master table.
-    if 'decl' in ztf_targets.columns:
-        ztf_targets.rename(columns={'decl': 'dec'}, inplace=True)
+    if ztf_targets.size > 0:
+        # Rename 'decl' to 'dec' if it exists
+        # Lasair won't let you have dec as a column name, so I have decl.
+        # But we need dec for the master table.
+        if 'decl' in ztf_targets.columns:
+            ztf_targets.rename(columns={'decl': 'dec'}, inplace=True)
     
-    ## If adding LSST, do it here, returning a DataFrame 
+        ## If adding LSST, do it here, returning a DataFrame 
+        
+        #Trim the targets to the columns needed for the master table
+        ztf4master = ztf_targets[neededTargetColumns]
+        allSourceSurveys.append(ztf4master)
     
-    #Trim the targets to the columns needed for the master table
-    ztf4master = ztf_targets[neededTargetColumns]
-
+    if len(allSourceSurveys) == 0:
+        print('!!! No Transients !!!')
+        return None
+        
     ## Combine all the targets into a single DataFrame
     ## If adding LSST, do it here
-    allTargets = pd.concat([ztf4master]) ## Combine all targets into a single DataFrame
+    allTargets = pd.concat(allSourceSurveys) ## Combine all targets into a single DataFrame
 
     if len(allTargets) == 0:
         #print('!!! No Transients !!!')
