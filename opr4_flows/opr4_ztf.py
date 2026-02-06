@@ -14,6 +14,66 @@ import json
 import os
 import lasair  # Uncomment when lasair package is available
 import numpy as np
+from prefect.artifacts import create_markdown_artifact
+from prefect import flow, task
+from datetime import datetime
+
+@task
+def ingest_report(recentUniqueObjects):
+    """
+    Generates a markdown report for the ZTF transients.
+    
+    Args:
+        recentUniqueObjects (pd.DataFrame): The DataFrame containing the recent ZTF objects.
+    """
+    
+    date_str = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    
+
+    markdown_report = f"# TiDES ZTF Stream Report\n"
+    markdown_report += f"**Date:** {date_str}\n\n"
+
+    def generate_section(title, data):
+        # Check if data is a list (and empty) or None
+        if isinstance(data, list):
+            if not data:
+                return ""
+            try:
+                df = pd.DataFrame(data)
+            except:
+                return ""
+        else:
+            df = data
+
+        # Check if it's a DataFrame and not empty
+        if isinstance(df, pd.DataFrame) and not df.empty:
+            section = f"## {title}\n"
+            
+            try:
+                section += df.to_markdown(index=False, tablefmt="pipe")
+            except ImportError:
+                section += df.to_csv(sep="|", index=False)
+            
+            return section + "\n\n"
+        
+        return ""
+
+    markdown_report += generate_section("ZTF Transients", recentUniqueObjects)
+
+    # If report is empty (besides header), mention it
+    if len(markdown_report.split('\n')) <= 4:
+         markdown_report += "_No new transients in this batch._"
+
+    # Create the artifact
+    artifact_key = f"tides-ztf-stream-report"
+
+    create_markdown_artifact(
+        key=artifact_key,
+        markdown=markdown_report,
+        description=f"TiDES ZTF Stream Report - {date_str}"
+    )
+
+    return markdown_report
 
 def connect_lasair():
     """
@@ -60,14 +120,16 @@ def get_latest_batch(consumer):
             print(str(msg.error()))
             break
         jmsg = json.loads(msg.value())
-        print('jmsg: ',jmsg)
+        #print('jmsg: ',jmsg)
         mostRecentComm = pd.DataFrame(jmsg, columns=jmsg.keys(), index=[0])
         recentObjects = pd.concat([recentObjects,mostRecentComm], ignore_index=True)
     #print('Length Recent Objects: ', len(recentObjects))
     if len(recentObjects)!=0:
         recentUniqueObjects = recentObjects.sort_values("jdmax", ascending = False).drop_duplicates(subset=["objectId"], inplace=False, keep="first")
     else: recentUniqueObjects = recentObjects
-    print('Recent ZTF Object: ',recentObjects)
+    #print('Recent ZTF Object: ',recentObjects)
+
+    ingest_report(recentUniqueObjects)
 
     return recentUniqueObjects
     
