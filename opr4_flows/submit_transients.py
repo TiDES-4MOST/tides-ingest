@@ -309,7 +309,7 @@ import logging, logging.handlers
 import argparse
 import time
 from timeit import default_timer as timer
-import distutils.version
+#import distutils.version
 import traceback as tb
 import datetime
 import pprint
