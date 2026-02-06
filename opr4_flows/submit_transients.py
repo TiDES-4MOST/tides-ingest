@@ -309,7 +309,7 @@ import logging, logging.handlers
 import argparse
 import time
 from timeit import default_timer as timer
-#import distutils.version
+import distutils.version
 import traceback as tb
 import datetime
 import pprint
@@ -656,15 +656,15 @@ def get_list(pk=None, flt=None, limit=None, timeout=15, return_mode="listdict"):
     token = ACCESS_TOKEN
     if pk is not None:
         url = "%s/%s/" % (url.rstrip("/"), pk)
-    if flt is not None:
-        url = "%s/?%s" % (url.rstrip("/"), flt)
-    if limit is not None:
-        if flt is None:
-            flt = f"limit={limit}"
-        elif "limit=" in flt:
-            pass
-        else:
-            flt = f"{flt}&limit={limit}"
+    else:
+        params = []
+        if flt is not None:
+            params.append(flt)
+        if limit is not None and (flt is None or "limit=" not in flt):
+            params.append(f"limit={limit}")
+        if params:
+            url = "%s/?%s" % (url.rstrip("/"), "&".join(params))
+    log.debug("will query as: %s", url)
     session = get_session(username=username, password=password, token=token)
     r = session.get(
         url,
@@ -709,17 +709,17 @@ def create_transient(data=None, printout=True,
     elif isinstance(data, (dict, list)):
         pass
     else:
-        payload = dict(DEFAULT_PAYLOAD)
         if no_single_quotes:
             data = data.replace("'", '"')
         data = json.loads(data)
         if isinstance(data, list):
             raise SyntaxError("the JSON produced from the data payload should be a single dictionary and not a list!")
         log.debug(f"json payload looks like: {data}")
+        payload = dict(DEFAULT_PAYLOAD)
         payload.update(data)
         data = payload
         del payload
-    data = json.dumps(data)
+    # data = json.dumps(data)
     session = get_session(username=username, password=password, token=token)
     r = session.post(
         url,
@@ -941,11 +941,11 @@ if __name__ == '__main__':
     )
     parser.add_argument(
         "--update", type=int, default=None,
-        help="updates the third transient with a name matching the current timestamp"
+        help="updates the transient matching the primary key (pk == id)"
     )
     parser.add_argument(
         "--delete", type=int, default=None,
-        help="updates the third transient with a name matching the current timestamp"
+        help="deletes the transient matching the primary key (pk == id)"
     )
     # dev-related controls
     parser.add_argument(
