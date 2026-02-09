@@ -419,7 +419,7 @@ def run_opr4_workflow():
         #print(upsertedData.columns)
         #print(upsertedData[['tides_id','pk_4most','old_status','active']])
         
-        id_ChangeState = upsertedData[['tides_id', 'pk_4most']]\
+        id_ChangeState = upsertedData[['tides_id', 'pk_4most', 'active']]\
             [(upsertedData['old_status'] != upsertedData['active']) & (upsertedData['pk_4most'].notnull())]
         #print('Change State',id_ChangeState)
         #upsertStaged2(upsertedData,conn) ## Upsert the recent data into the staged2 table
