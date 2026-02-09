@@ -412,8 +412,7 @@ def run_opr4_workflow():
     with engine.connect() as conn:
 
         createTransientStage(allTargets, conn) ## Create a temporary table for the recent detections
-        conn.commit()
-
+        
         upsertedData = upsertToMaster(conn) ## Upsert Recent data into the master table
         conn.commit()
         #print(upsertedData.columns)
