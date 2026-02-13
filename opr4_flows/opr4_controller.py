@@ -418,7 +418,7 @@ def run_opr4_workflow():
         
         upsertedData = upsertToMaster(conn) ## Upsert Recent data into the master table
         #conn.commit()
-        print(upsertedData)
+        print(upsertedData[['survey_id','tides_id']])
         #print(upsertedData[['tides_id','pk_4most','old_status','active']])
         sys.exit()
         id_ChangeState = upsertedData[['tides_id', 'pk_4most', 'active']]\
