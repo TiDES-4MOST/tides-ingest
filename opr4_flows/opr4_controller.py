@@ -362,7 +362,7 @@ def run_opr4_workflow():
     """
     The main Prefect flow for the OPR4 process.
     """
-    neededTargetColumns = ['objectId','ra', 'dec', 'jdmin', 'jdmax', 'gmag', 'rmag', 'survey_id']
+    neededTargetColumns = ['ra', 'dec', 'jdmin', 'jdmax', 'gmag', 'rmag', 'survey_id']
     
     # 1. Load configuration and credentials
     load_credentials()
@@ -418,7 +418,7 @@ def run_opr4_workflow():
         
         upsertedData = upsertToMaster(conn) ## Upsert Recent data into the master table
         #conn.commit()
-        print(upsertedData.columns)
+        print(upsertedData)
         #print(upsertedData[['tides_id','pk_4most','old_status','active']])
         sys.exit()
         id_ChangeState = upsertedData[['tides_id', 'pk_4most', 'active']]\
