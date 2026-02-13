@@ -414,10 +414,10 @@ def run_opr4_workflow():
         createTransientStage(allTargets, conn) ## Create a temporary table for the recent detections
         
         upsertedData = upsertToMaster(conn) ## Upsert Recent data into the master table
-        conn.commit()
-        #print(upsertedData.columns)
+        #conn.commit()
+        print(upsertedData.columns)
         #print(upsertedData[['tides_id','pk_4most','old_status','active']])
-        
+        sys.exit()
         id_ChangeState = upsertedData[['tides_id', 'pk_4most', 'active']]\
             [(upsertedData['old_status'] != upsertedData['active']) & (upsertedData['pk_4most'].notnull())]
         #print('Change State',id_ChangeState)
