@@ -362,7 +362,7 @@ def run_opr4_workflow():
     """
     The main Prefect flow for the OPR4 process.
     """
-    neededTargetColumns = ['objectId','ra', 'dec', 'jdmin', 'jdmax', 'gmag', 'rmag']
+    neededTargetColumns = ['objectId','ra', 'dec', 'jdmin', 'jdmax', 'gmag', 'rmag', 'survey_id']
     
     # 1. Load configuration and credentials
     load_credentials()
@@ -378,6 +378,9 @@ def run_opr4_workflow():
         # But we need dec for the master table.
         if 'decl' in ztf_targets.columns:
             ztf_targets.rename(columns={'decl': 'dec'}, inplace=True)
+        if 'objectId' in ztf_targets.columns:
+            ztf_targets.rename(columns={'objectId': 'survey_id'}, inplace=True)
+        
     
         ## If adding LSST, do it here, returning a DataFrame 
         
