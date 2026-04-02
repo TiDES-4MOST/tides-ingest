@@ -1,0 +1,39 @@
+# Welcome to your prefect.yaml file! You can use this file for storing and managing
+# configuration for deploying your flows. We recommend committing this file to source
+# control along with your flow code.
+
+# Generic metadata about this project
+name: tides-ingest
+prefect-version: 3.6.11
+# ... (metadata remains the same)
+
+build:
+- prefect_docker.deployments.steps.build_docker_image:
+    id: build_image
+    requires: prefect-docker>=0.3.1
+    image_name: "opr4_ingest"
+    tag: latest
+    dockerfile: auto
+    # REMOVED: push: false (this was causing the TypeError)
+
+# REMOVE the push section entirely to ensure no push is attempted
+push: null 
+
+pull:
+- prefect.deployments.steps.set_working_directory:
+    directory: /opt/prefect/tides-ingest
+
+deployments:
+- name: opr4-deploy
+  version: "0.1"
+  entrypoint: "opr4_flows/opr4_controller.py:run_opr4_workflow"
+  work_pool:
+    name: opr4
+    job_variables:
+      image: '{{ build_image.image }}'
+      # CRITICAL: This tells the Docker worker to use your local build
+      # instead of trying to pull "opr4_ingest" from Docker Hub.
+      image_pull_policy: "IfNotPresent" 
+      env:
+        env_file: .env
+        PREFECT_API_URL: "{{ $PREFECT_SECRET_API }}"

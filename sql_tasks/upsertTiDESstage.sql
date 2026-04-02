@@ -1,20 +1,62 @@
-MERGE INTO tides_master tm 
-USING tides_stage ts
-ON ts.name=tm.name
-WHEN MATCHED THEN
-UPDATE set
-jdmax = ts.jdmax,
-magrmin = ts.magrmin,
-maggmin = ts.maggmin,
-rmag = ts.rmag,
-gmag = ts.gmag,
-jdgmax = ts.jdgmax,
-jdrmax = ts.jdrmax,
-ncandgp = ts.ncandgp,
-sherlock_class = ts.classification,
-active = True,
-updated = CURRENT_TIMESTAMP
-WHEN NOT MATCHED THEN
-INSERT (name, ra, dec, jdmin, jdmax, magrmin, maggmin, rmag, gmag, jdgmax, jdrmax, ncandgp, sherlock_class, active, created, updated )
-VALUES (ts.name, ts.ramean, ts.decmean, ts.jdmin, ts.jdmax, ts.magrmin, ts.maggmin, ts.rmag, ts.gmag,
- ts.jdgmax, ts.jdrmax, ts.ncandgp, ts.classification, True, CURRENT_TIMESTAMP,CURRENT_TIMESTAMP );   
+WITH old_data AS (
+    SELECT tm.tides_id,
+        tm.active AS old_status
+    FROM tides_master tm,
+        tides_stage ts
+    WHERE q3c_radial_query(ts.ra, ts.dec, tm.ra, tm.dec, 0.000277778)
+),
+updated_rows AS (
+    UPDATE tides_master tm
+    SET jdmax = ts.jdmax,
+        active = True,
+        glatest = ts.gmag,
+        rlatest = ts.rmag,
+        updated = CURRENT_TIMESTAMP
+    FROM tides_stage ts
+    WHERE q3c_radial_query(ts.ra, ts.dec, tm.ra, tm.dec, 0.000277778)
+    RETURNING tm.*
+),
+inserted_rows AS (
+    INSERT INTO tides_master (
+            ra,
+            dec,
+            jdmin,
+            jdmax,
+            jd_obs_trigger,
+            glatest,
+            rlatest,
+            active,
+            created,
+            updated
+        )
+    SELECT ts.ra,
+        ts.dec,
+        ts.jdmin,
+        ts.jdmax,
+        ts.jdmax,
+        ts.gmag,
+        ts.rmag,
+        True,
+        CURRENT_TIMESTAMP,
+        CURRENT_TIMESTAMP
+    FROM tides_stage ts
+    WHERE NOT EXISTS (
+            SELECT 1
+            FROM tides_master tm
+            WHERE q3c_radial_query(ts.ra, ts.dec, tm.ra, tm.dec, 0.000277778)
+        )
+    RETURNING *
+),
+joinedOldNew AS (
+    SELECT updated_rows.*,
+        old_data.old_status
+    FROM updated_rows,
+        old_data
+    WHERE updated_rows.tides_id = old_data.tides_id
+)
+SELECT *
+FROM joinedOldNew
+UNION ALL
+SELECT *,
+    NULL as old_status
+FROM inserted_rows;
