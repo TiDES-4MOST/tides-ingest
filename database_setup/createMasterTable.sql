@@ -10,6 +10,8 @@ CREATE TABLE IF NOT EXISTS tides_master(
     jdmin double precision,
     jdmax double precision,
     jd_obs_trigger double precision,
+    -- Replaced glatest/rlatest with a dynamic JSONB dictionary.
+    -- Stores the most recent magnitude for any given filter map, e.g. {"g": 21.3, "i": 22.0}
     latest_mags JSONB DEFAULT '{}'::jsonb,
     active BOOL DEFAULT FALSE,
     created TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,

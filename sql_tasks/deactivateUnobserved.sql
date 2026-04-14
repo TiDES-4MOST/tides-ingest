@@ -5,8 +5,14 @@ WHERE active = True
     AND (
         updated < now() - interval '5days'
         OR (
+            -- Ensure we actually have magnitudes before checking them
             latest_mags != '{}'::jsonb
             AND
+            -- Check if ALL of the recorded magnitudes are fainter than 22.5
+            -- jsonb_each_text expands our { "g": 23.0, "i": 21.0 } object into rows.
+            -- Using "NOT EXISTS ( ... WHERE value <= 22.5)" means:
+            -- "Are there NO filters brighter than or equal to 22.5?"
+            -- If this resolves to TRUE, the object is genuinely too faint across ALL latest filters, so we deactivate it.
             NOT EXISTS (
                 SELECT 1
                 FROM jsonb_each_text(latest_mags)
