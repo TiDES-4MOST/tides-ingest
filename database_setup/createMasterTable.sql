@@ -53,7 +53,7 @@ IF last_yy IS NOT NULL
 AND last_yy != current_yy THEN PERFORM setval('tides_seq', 0, false);
 END IF;
 -- Construct the name
-NEW.name := 'TiDES-SN' || current_yy || to_dynamic_alpha(nextval('tides_seq')::int);
+NEW.name := 'TiDES' || current_yy || to_dynamic_alpha(nextval('tides_seq')::int);
 RETURN NEW;
 END;
 $$ LANGUAGE plpgsql;
