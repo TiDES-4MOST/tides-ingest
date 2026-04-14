@@ -5,8 +5,13 @@ WHERE active = True
     AND (
         updated < now() - interval '5days'
         OR (
-            rlatest > 22.5
-            and glatest > 22.5
+            latest_mags != '{}'::jsonb
+            AND
+            NOT EXISTS (
+                SELECT 1
+                FROM jsonb_each_text(latest_mags)
+                WHERE value::numeric <= 22.5
+            )
         )
     );
 --- Update the master table to deactivate the objects

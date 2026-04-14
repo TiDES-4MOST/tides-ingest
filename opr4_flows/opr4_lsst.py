@@ -1,12 +1,12 @@
 """
-opr4_ztf.py
+opr4_lsst.py
 
 This module contains the logic for connecting to the Lasair API and importing transients from a stream.
 It is designed to be imported by opr4_controller.py.
 
 Usage:
-    import opr4_ztf
-    targets = opr4_ztf.get_targets()
+    import opr4_lsst
+    targets = opr4_lsst.get_targets()
 """
 
 import pandas as pd
@@ -21,16 +21,16 @@ from datetime import datetime
 @task
 def ingest_report(recentUniqueObjects):
     """
-    Generates a markdown report for the ZTF transients.
+    Generates a markdown report for the LSST transients.
     
     Args:
-        recentUniqueObjects (pd.DataFrame): The DataFrame containing the recent ZTF objects.
+        recentUniqueObjects (pd.DataFrame): The DataFrame containing the recent LSST objects.
     """
     
     date_str = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
     
 
-    markdown_report = f"# TiDES ZTF Stream Report\n"
+    markdown_report = f"# TiDES LSST Stream Report\n"
     markdown_report += f"**Date:** {date_str}\n\n"
 
     def generate_section(title, data):
@@ -58,19 +58,19 @@ def ingest_report(recentUniqueObjects):
         
         return ""
 
-    markdown_report += generate_section("ZTF Transients", recentUniqueObjects)
+    markdown_report += generate_section("LSST Transients", recentUniqueObjects)
 
     # If report is empty (besides header), mention it
     if len(markdown_report.split('\n')) <= 4:
          markdown_report += "_No new transients in this batch._"
 
     # Create the artifact
-    artifact_key = f"tides-ztf-stream-report"
+    artifact_key = f"tides-lsst-stream-report"
 
     create_markdown_artifact(
         key=artifact_key,
         markdown=markdown_report,
-        description=f"TiDES ZTF Stream Report - {date_str}"
+        description=f"TiDES LSST Stream Report - {date_str}"
     )
 
     return markdown_report
@@ -83,14 +83,14 @@ def connect_lasair():
         lasair_consumer object: The consumer object to poll for messages.
     """
     # Load configuration settings from environment variables
-    topic = os.getenv('LASAIR_ZTF_TOPIC')
-    #group_id = os.getenv('LASAIR_ZTF_GROUP_ID') # TODO: Uncomment for production
+    topic = os.getenv('LASAIR_LSST_TOPIC')
+    #group_id = os.getenv('LASAIR_LSST_GROUP_ID') # TODO: Uncomment for production
     group_id = 'opr4'+str(np.random.randint(0, 1000))
-    token = os.getenv('LASAIR_ZTF_TOKEN')
+    token = os.getenv('LASAIR_LSST_TOKEN')
     
     # Check if credentials are set
     if not all([topic, group_id, token]):
-        print("Warning: Lasair ZTF credentials not fully set in .env")
+        print("Warning: Lasair LSST credentials not fully set in .env")
 
     # TODO: Initialize Lasair consumer
     consumer = lasair.lasair_consumer('kafka.lsst.ac.uk:9092', group_id, topic)
@@ -127,7 +127,7 @@ def get_latest_batch(consumer):
     if len(recentObjects)!=0:
         recentUniqueObjects = recentObjects.sort_values("jdmax", ascending = False).drop_duplicates(subset=["objectId"], inplace=False, keep="first")
     else: recentUniqueObjects = recentObjects
-    #print('Recent ZTF Object: ',recentObjects)
+    #print('Recent LSST Object: ',recentObjects)
 
     ingest_report(recentUniqueObjects)
 
@@ -144,7 +144,7 @@ def process_transients(raw_data):
 
     out_df = pd.DataFrame()
     out_df['object_id'] = raw_data.get('objectId', raw_data.get('id', pd.Series(dtype='str')))
-    out_df['survey_id'] = 2  # integer id for ZTF
+    out_df['survey_id'] = 1  # integer id for LSST
     out_df['ra'] = raw_data.get('ra', pd.Series(dtype='float'))
     
     if 'decl' in raw_data.columns:
@@ -159,14 +159,12 @@ def process_transients(raw_data):
     if 'latestFilter' in raw_data.columns and 'latestMag' in raw_data.columns:
          out_df['latest_filter'] = raw_data['latestFilter'].astype(str)
          out_df['latest_mag'] = raw_data['latestMag'].astype(float)
-    elif 'gmag' in raw_data.columns and 'rmag' in raw_data.columns:
-         out_df['latest_mag'] = raw_data['gmag'].fillna(raw_data['rmag'])
-         out_df['latest_filter'] = np.where(raw_data['gmag'].notnull(), 'g', 'r')
     else:
+         # Simplified fallback, customize once LSST JSON object schema is finalised
          out_df['latest_filter'] = 'unknown'
          out_df['latest_mag'] = 29.99
 
-    print(f"Processed {len(out_df)} transients from ZTF.")
+    print(f"Processed {len(out_df)} transients from LSST.")
     return out_df
 
 def get_targets():
@@ -193,28 +191,28 @@ def get_targets():
 
 if __name__ == "__main__":
     from dotenv import load_dotenv
-    # def load_credentials():
-    #     """
-    #     Loads 4MOST API credentials from a YAML file.
+    def load_credentials():
+        """
+        Loads 4MOST API credentials from a YAML file.
         
-    #     This mirrors the 'connect4MOST_API' and 'loadTiDESdbSettings' logic from tidesCom.py.
-    #     """
-    #     global USERNAME, PASSWORD, SCHEMA, ACCESS_TOKEN
+        This mirrors the 'connect4MOST_API' and 'loadTiDESdbSettings' logic from tidesCom.py.
+        """
+        global USERNAME, PASSWORD, SCHEMA, ACCESS_TOKEN
         
-    #     # Load credentials from .env
-    #     load_dotenv()
+        # Load credentials from .env
+        load_dotenv()
         
-    #     USERNAME = os.getenv('FOURMOST_USERNAME')
-    #     PASSWORD = os.getenv('FOURMOST_PASSWORD')
-    #     SCHEMA = os.getenv('FOURMOST_SCHEMA')
-    #     ACCESS_TOKEN = os.getenv('FOURMOST_ACCESS_TOKEN')
+        USERNAME = os.getenv('FOURMOST_USERNAME')
+        PASSWORD = os.getenv('FOURMOST_PASSWORD')
+        SCHEMA = os.getenv('FOURMOST_SCHEMA')
+        ACCESS_TOKEN = os.getenv('FOURMOST_ACCESS_TOKEN')
         
-    #     # Check if critical credentials are loaded
-    #     if not all([USERNAME, PASSWORD]):
-    #         print("Warning: 4MOST credentials not found in .env")
+        # Check if critical credentials are loaded
+        if not all([USERNAME, PASSWORD]):
+            print("Warning: 4MOST credentials not found in .env")
         
-    #     print("Loading credentials from environment variables...")
-    #     return None
-    # load_credentials()
+        print("Loading credentials from environment variables...")
+        return None
+    load_credentials()
     targets = get_targets()
     print(targets)

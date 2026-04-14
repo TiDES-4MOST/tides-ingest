@@ -7,10 +7,9 @@ WITH old_data AS (
 ),
 updated_rows AS (
     UPDATE tides_master tm
-    SET jdmax = ts.jdmax,
+    SET jdmax = GREATEST(tm.jdmax, ts.jdmax),
         active = True,
-        glatest = ts.gmag,
-        rlatest = ts.rmag,
+        latest_mags = COALESCE(tm.latest_mags, '{}'::jsonb) || jsonb_build_object(ts.latest_filter, ts.latest_mag),
         updated = CURRENT_TIMESTAMP
     FROM tides_stage ts
     WHERE q3c_radial_query(ts.ra, ts.dec, tm.ra, tm.dec, 0.000277778)
@@ -23,8 +22,7 @@ inserted_rows AS (
             jdmin,
             jdmax,
             jd_obs_trigger,
-            glatest,
-            rlatest,
+            latest_mags,
             active,
             created,
             updated
@@ -34,8 +32,7 @@ inserted_rows AS (
         ts.jdmin,
         ts.jdmax,
         ts.jdmax,
-        ts.gmag,
-        ts.rmag,
+        jsonb_build_object(ts.latest_filter, ts.latest_mag),
         True,
         CURRENT_TIMESTAMP,
         CURRENT_TIMESTAMP

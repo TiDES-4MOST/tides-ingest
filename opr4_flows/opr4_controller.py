@@ -237,15 +237,26 @@ def upsertToMaster(cnx):
   
   # Convert to pandas DataFrame
   upsertStage = pd.DataFrame(result)
+  
+  # Populate the surveys junction table
+  mapping_query = """
+  INSERT INTO surveys (tides_id, source_survey_id, transient_name)
+  SELECT tm.tides_id, ts.survey_id, ts.object_id
+  FROM tides_stage ts
+  JOIN tides_master tm ON q3c_radial_query(ts.ra, ts.dec, tm.ra, tm.dec, 0.000277778)
+  ON CONFLICT DO NOTHING;
+  """
+  cnx.execute(sqlalchemy.text(mapping_query))
+  
   return upsertStage
 
-@task(cache_policy=NO_CACHE)
-def upsertStaged2(upsertStage,cnx):
-    upsertStage.columns = map(str.lower, upsertStage.columns)
-    cols_with_types = ", ".join([f"{name} {map_dtype(dtype)}" for name, dtype in upsertStage.dtypes.items()])
-    cnx.execute(sqlalchemy.text(f"CREATE TEMPORARY TABLE tides_stage2 ({cols_with_types})"))
-    upsertStage.to_sql('tides_stage2', con=cnx, if_exists='append', index=False)
-    print('Upserted Stage 2data', upsertStage)
+# @task(cache_policy=NO_CACHE)
+# def upsertStaged2(upsertStage,cnx):
+#     upsertStage.columns = map(str.lower, upsertStage.columns)
+#     cols_with_types = ", ".join([f"{name} {map_dtype(dtype)}" for name, dtype in upsertStage.dtypes.items()])
+#     cnx.execute(sqlalchemy.text(f"CREATE TEMPORARY TABLE tides_stage2 ({cols_with_types})"))
+#     upsertStage.to_sql('tides_stage2', con=cnx, if_exists='append', index=False)
+#     print('Upserted Stage 2data', upsertStage)
 
 
 @task(cache_policy=NO_CACHE)
@@ -274,12 +285,16 @@ def createNewTransientin4MOST(tableIn):
     return []
   for index,row in tableIn.iterrows():
     catDict = row.to_dict()
-    #print(catDict['name'])
     
-    r_val = float(catDict['rlatest'])
-    g_val = float(catDict['glatest'])
-    if np.isnan(r_val): r_val = 29.99
-    if np.isnan(g_val): g_val = 29.99
+    latest_mags = catDict.get('latest_mags', {})
+    if isinstance(latest_mags, str):
+        latest_mags = json.loads(latest_mags)
+        
+    min_mag = 29.99
+    min_filter = "unknown"
+    if latest_mags:
+        min_filter = min(latest_mags, key=lambda k: float(latest_mags[k]))
+        min_mag = float(latest_mags[min_filter])
     
     uploadParams = {
     "uploadedfor_survey_id": 15,
@@ -299,9 +314,9 @@ def createNewTransientin4MOST(tableIn):
     "extent_flag": 0,
     "extent_parameter": 0,
     "extent_index": 0,
-    "mag": min(r_val, g_val),
+    "mag": min_mag,
     # "mag_err": None,
-    "mag_type": "LSST_r_AB",
+    "mag_type": f"LSST_{min_filter}_AB",
     # "reddening": None,
     # "date_earliest": None,
     # "date_latest": None,
@@ -357,12 +372,12 @@ def updateTiDESMasterwith4MOSTKey(newTable, cnx):
   # print(row.mappings().all())
   query.close()
 
-@flow(name="OPR4 Workflow")
+@flow(name="delta OPR4 Workflow")
 def run_opr4_workflow():
     """
     The main Prefect flow for the OPR4 process.
     """
-    neededTargetColumns = ['ra', 'dec', 'jdmin', 'jdmax', 'gmag', 'rmag', 'survey_id']
+    neededTargetColumns = ['object_id', 'survey_id', 'ra', 'dec', 'jdmin', 'jdmax', 'latest_filter', 'latest_mag']
     
     # 1. Load configuration and credentials
     load_credentials()
@@ -372,18 +387,7 @@ def run_opr4_workflow():
     # 2. Fetch targets from the ZTF stream (via opr4_ztf)
     ztf_targets = fetch_ztf_targets()
     
-    if ztf_targets.size > 0:
-        # Rename 'decl' to 'dec' if it exists
-        # Lasair won't let you have dec as a column name, so I have decl.
-        # But we need dec for the master table.
-        if 'decl' in ztf_targets.columns:
-            ztf_targets.rename(columns={'decl': 'dec'}, inplace=True)
-        if 'objectId' in ztf_targets.columns:
-            ztf_targets.rename(columns={'objectId': 'survey_id'}, inplace=True)
-        
-    
-        ## If adding LSST, do it here, returning a DataFrame 
-        
+    if len(ztf_targets) > 0:
         #Trim the targets to the columns needed for the master table
         ztf4master = ztf_targets[neededTargetColumns]
         allSourceSurveys.append(ztf4master)
