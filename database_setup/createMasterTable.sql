@@ -13,6 +13,10 @@ CREATE TABLE IF NOT EXISTS tides_master(
     -- Replaced glatest/rlatest with a dynamic JSONB dictionary.
     -- Stores the most recent magnitude for any given filter map, e.g. {"g": 21.3, "i": 22.0}
     latest_mags JSONB DEFAULT '{}'::jsonb,
+    -- Stores the MJD corresponding to the latest_mags observation for each filter
+    latest_mjd JSONB DEFAULT '{}'::jsonb,
+    -- Stores the cumulative number of detections for each filter independently
+    n_sources JSONB DEFAULT '{}'::jsonb,
     active BOOL DEFAULT FALSE,
     created TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
     updated TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP

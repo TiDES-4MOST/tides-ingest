@@ -316,7 +316,7 @@ def createNewTransientin4MOST(tableIn):
     "extent_index": 0,
     "mag": min_mag,
     # "mag_err": None,
-    "mag_type": f"LSST_{min_filter}_AB",
+    "mag_type": f"LSST_r_AB",
     # "reddening": None,
     # "date_earliest": None,
     # "date_latest": None,
@@ -453,31 +453,33 @@ def run_opr4_workflow():
         #TODO: Better error reporting below when things don't go well
         #Perhaps put a try/except in and then report the error in a prefect log
 
-        if len(upsertedData[upsertedData['pk_4most'].isnull()])>0:
-            #print('Sending new {} transients to 4MOST'.format(len(upsertedData[upsertedData['pk_4most'].isnull()])))
-            newTransients = createNewTransientin4MOST(upsertedData[upsertedData['pk_4most'].isnull()])
-        else:
-            #print('No new transients to send to 4MOST')
-            newTransients = []
+### !!! UNCOMMENT FOR PRODUCTION !!! ###
+### !!! IN DEV THESE OBJECTS DON'T GET SENT TO 4MOST !!! ###
+        # if len(upsertedData[upsertedData['pk_4most'].isnull()])>0:
+        #     #print('Sending new {} transients to 4MOST'.format(len(upsertedData[upsertedData['pk_4most'].isnull()])))
+        #     newTransients = createNewTransientin4MOST(upsertedData[upsertedData['pk_4most'].isnull()])
+        # else:
+        #     #print('No new transients to send to 4MOST')
+        #     newTransients = []
         
-        if len(deactivate_TiDES_IDs)>0:
-            #print('Deactivating {} transients in 4MOST'.format(len(deactivate_TiDES_IDs)))
-            deactivatedTransients = updateExisitingTransient(deactivate_TiDES_IDs)
-        else:
-            #print('No transients to deactivate in 4MOST')
-            deactivatedTransients = []
+        # if len(deactivate_TiDES_IDs)>0:
+        #     #print('Deactivating {} transients in 4MOST'.format(len(deactivate_TiDES_IDs)))
+        #     deactivatedTransients = updateExisitingTransient(deactivate_TiDES_IDs)
+        # else:
+        #     #print('No transients to deactivate in 4MOST')
+        #     deactivatedTransients = []
         
-        if len(id_ChangeState)>0:
-            #print('Updating {} transients in 4MOST due to False->True state change'.format(len(id_ChangeState)))
-            updatedTransients = updateExisitingTransient(id_ChangeState)
-        else:
-            #print('No transients to update in 4MOST')
-            updatedTransients = []
-        #print(newTransients)
+        # if len(id_ChangeState)>0:
+        #     #print('Updating {} transients in 4MOST due to False->True state change'.format(len(id_ChangeState)))
+        #     updatedTransients = updateExisitingTransient(id_ChangeState)
+        # else:
+        #     #print('No transients to update in 4MOST')
+        #     updatedTransients = []
+        # #print(newTransients)
         
-        if len(newTransients)>0:            
-            updateTiDESMasterwith4MOSTKey(newTransients, conn)
-            conn.commit()
+        # if len(newTransients)>0:            
+        #     updateTiDESMasterwith4MOSTKey(newTransients, conn)
+        #     conn.commit()
 
     print("Generating report...")
     ingest_report(newTransients, updatedTransients, deactivatedTransients)

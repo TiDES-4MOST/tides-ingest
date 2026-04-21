@@ -155,6 +155,11 @@ def process_transients(raw_data):
     out_df['jdmin'] = raw_data.get('jdmin', pd.Series(dtype='float'))
     out_df['jdmax'] = raw_data.get('jdmax', pd.Series(dtype='float'))
 
+    # TODO: Calculate the number of detections per filter from raw data
+    # You indicated you will manually implement this per-filter extracting logic.
+    # We assign a default value of 1 for now to fulfill the schema contract.
+    out_df['n_sources'] = 1
+
     # Derive standard magnitude/filter fields
     if 'latestFilter' in raw_data.columns and 'latestMag' in raw_data.columns:
          out_df['latest_filter'] = raw_data['latestFilter'].astype(str)

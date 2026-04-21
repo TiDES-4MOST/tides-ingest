@@ -17,6 +17,8 @@ updated_rows AS (
         -- and concatenate it (||) with the existing latest_mags JSON object. 
         -- This overwrites the old magnitude for that specific filter while leaving other filters intact.
         latest_mags = COALESCE(tm.latest_mags, '{}'::jsonb) || jsonb_build_object(ts.latest_filter, ts.latest_mag),
+        latest_mjd = COALESCE(tm.latest_mjd, '{}'::jsonb) || jsonb_build_object(ts.latest_filter, ts.jdmax),
+        n_sources = COALESCE(tm.n_sources, '{}'::jsonb) || jsonb_build_object(ts.latest_filter, ts.n_sources),
         updated = CURRENT_TIMESTAMP
     FROM tides_stage ts
     WHERE q3c_radial_query(ts.ra, ts.dec, tm.ra, tm.dec, 0.000277778)
@@ -31,6 +33,8 @@ inserted_rows AS (
             jdmax,
             jd_obs_trigger,
             latest_mags,
+            latest_mjd,
+            n_sources,
             active,
             created,
             updated
@@ -40,8 +44,10 @@ inserted_rows AS (
         ts.jdmin,
         ts.jdmax,
         ts.jdmax,
-        -- Initialize the JSONB column with the very first detection's filter and magnitude 
+        -- Initialize the JSONB columns with the very first detection's filter values
         jsonb_build_object(ts.latest_filter, ts.latest_mag),
+        jsonb_build_object(ts.latest_filter, ts.jdmax),
+        jsonb_build_object(ts.latest_filter, ts.n_sources),
         True,
         CURRENT_TIMESTAMP,
         CURRENT_TIMESTAMP
