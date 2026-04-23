@@ -22,7 +22,6 @@ SELECT objects.diaObjectId,
     objects.nrSources,
     objects.niSources,
     objects.nzSources,
-    objects.nPosDiaSourcesNights,
     sherlock_classifications.classification as sherlock_classifications
 FROM sherlock_classifications,
     objects,
