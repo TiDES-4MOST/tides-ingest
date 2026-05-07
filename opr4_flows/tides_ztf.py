@@ -75,17 +75,13 @@ def ingest_report(recentUniqueObjects):
 
     return markdown_report
 
-def connect_lasair():
+def connect_lasair(topic, group_id):
     """
     Establishes a connection to the Lasair API.
 
     Returns:
         lasair_consumer object: The consumer object to poll for messages.
     """
-    # Load configuration settings from environment variables
-    topic = os.getenv('LASAIR_ZTF_TOPIC')
-    #group_id = os.getenv('LASAIR_ZTF_GROUP_ID') # TODO: Uncomment for production
-    group_id = 'opr4'+str(np.random.randint(0, 1000))
     token = os.getenv('LASAIR_ZTF_TOKEN')
     
     # Check if credentials are set
@@ -134,7 +130,7 @@ def get_latest_batch(consumer):
     return recentUniqueObjects
     
 
-def process_transients(raw_data):
+def process_transients(raw_data, pipeline_id):
     """
     Filters and formats the raw transient data to meet the standard
     tides-ingest contract.
@@ -145,6 +141,7 @@ def process_transients(raw_data):
     out_df = pd.DataFrame()
     out_df['object_id'] = raw_data.get('objectId', raw_data.get('id', pd.Series(dtype='str')))
     out_df['survey_id'] = 2  # integer id for ZTF
+    out_df['pipeline_id'] = pipeline_id # Setting dynamic pipeline ID from args
     out_df['ra'] = raw_data.get('ra', pd.Series(dtype='float'))
     
     if 'decl' in raw_data.columns:
@@ -155,26 +152,35 @@ def process_transients(raw_data):
     out_df['jdmin'] = raw_data.get('jdmin', pd.Series(dtype='float'))
     out_df['jdmax'] = raw_data.get('jdmax', pd.Series(dtype='float'))
 
-    # TODO: Calculate the number of detections per filter from raw data
-    # You indicated you will manually implement this per-filter extracting logic.
-    # We assign a default value of 1 for now to fulfill the schema contract.
-    out_df['n_sources'] = 1
-
-    # Derive standard magnitude/filter fields
+    # Determine filter key
     if 'latestFilter' in raw_data.columns and 'latestMag' in raw_data.columns:
-         out_df['latest_filter'] = raw_data['latestFilter'].astype(str)
-         out_df['latest_mag'] = raw_data['latestMag'].astype(float)
+         filter_key = raw_data['latestFilter'].astype(str) + '_ztf'
+         raw_mag = raw_data['latestMag'].astype(float)
     elif 'gmag' in raw_data.columns and 'rmag' in raw_data.columns:
-         out_df['latest_mag'] = raw_data['gmag'].fillna(raw_data['rmag'])
-         out_df['latest_filter'] = np.where(raw_data['gmag'].notnull(), 'g', 'r')
+         raw_mag = raw_data['gmag'].fillna(raw_data['rmag'])
+         filter_key = np.where(raw_data['gmag'].notnull(), 'g_ztf', 'r_ztf')
     else:
-         out_df['latest_filter'] = 'unknown'
-         out_df['latest_mag'] = 29.99
+         filter_key = pd.Series('unknown_ztf', index=raw_data.index)
+         raw_mag = pd.Series(29.99, index=raw_data.index)
+
+    # Need json string representations of dicts for postgres
+    import json
+    out_df['latest_filter'] = raw_data.apply(lambda row: json.dumps({
+        filter_key.loc[row.name]: row.get('jdmax', 0)
+    }), axis=1)
+    
+    out_df['latest_mag'] = raw_data.apply(lambda row: json.dumps({
+        filter_key.loc[row.name]: raw_mag.loc[row.name]
+    }), axis=1)
+
+    out_df['n_sources'] = raw_data.apply(lambda row: json.dumps({
+        filter_key.loc[row.name]: 1
+    }), axis=1)
 
     print(f"Processed {len(out_df)} transients from ZTF.")
     return out_df
 
-def get_targets():
+def get_targets(pipeline_id, topic, group_id):
     """
     The main entry point for the controller.
     
@@ -182,16 +188,16 @@ def get_targets():
     ready for the controller.
 
     Returns:
-        list: A list of dictionary objects representing the targets and their properties.
+        list: A list of dict-like objects representing the targets and their properties.
     """
     # 1. Connect to Lasair
-    consumer = connect_lasair()
+    consumer = connect_lasair(topic, group_id)
     
     # 2. Get the latest batch of data
     latest_transients = get_latest_batch(consumer)
     
     # 3. Process and filter the data
-    targets = process_transients(latest_transients)
+    targets = process_transients(latest_transients, pipeline_id)
 
     
     return targets

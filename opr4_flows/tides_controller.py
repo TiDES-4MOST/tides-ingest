@@ -1,12 +1,12 @@
 """
-opr4_controller.py
+tides_controller.py
 
 This file is the specific implementation of the "Controller" process for the 4MOST operational rehearsal.
 It uses Prefect to orchestrate the workflow and manages 4MOST credentials.
 
 Usage:
     prefect deployment run 'run-opr4-workflow/main'
-    # OR python opr4_controller.py
+    # OR python tides_controller.py
 """
 
 from prefect import flow, task
@@ -14,7 +14,8 @@ from prefect import flow, task
 import yaml
 import os
 from dotenv import load_dotenv
-import opr4_ztf # Import the data source module
+import tides_ztf # Import the ZTF data source module
+import tides_lsst # Import the LSST #data source module
 import pandas as pd
 import numpy as np
 import sqlalchemy
@@ -24,6 +25,7 @@ import json
 from pandas.api import types
 from prefect.artifacts import create_markdown_artifact
 from datetime import datetime
+import sys
 
 # Global config placeholders
 # 4MOST API Credentials
@@ -159,22 +161,60 @@ def sqlalchmey_engine():
     return engine
 
 @task(cache_policy=NO_CACHE)
-def fetch_ztf_targets():
+def fetch_ztf_targets(engine, pipeline_name=None, pipeline_version=None, topic=None, group_id=None):
     """
-    Calls the opr4_ztf module to get the latest list of targets.
+    Calls the tides_ztf module to get the latest list of targets.
     """
-    print("Fetching targets from opr4_ztf...")
-    targets = opr4_ztf.get_targets()
+    pipeline_name = pipeline_name or os.getenv('ZTF_PIPELINE_NAME', 'TiDES-ZTF-default')
+    pipeline_version = pipeline_version or os.getenv('ZTF_PIPELINE_VERSION', 'v1.0')
+    topic = topic or os.getenv('LASAIR_ZTF_TOPIC')
+    group_id = group_id or 'opr4'+str(np.random.randint(0, 1000))
+
+    print(f"Fetching targets from opr4_ztf using pipeline: {pipeline_name} ({pipeline_version})...")
+
+    if engine is not None:
+        query = sqlalchemy.text("SELECT pipeline_id FROM pipelines WHERE pipeline_name = :n AND version = :v")
+        with engine.connect() as conn:
+            result = conn.execute(query, {'n': pipeline_name, 'v': pipeline_version}).fetchone()
+        
+        if not result:
+            raise ValueError(f"CRITICAL FIX REQUIRED: Pipeline '{pipeline_name}' version '{pipeline_version}' does not exist in the database.")
+            
+        pipeline_id = int(result[0])
+    else:
+        print(f"DEV MODE: Bypassing DB check for pipeline {pipeline_name}...")
+        pipeline_id = -1
+        
+    targets = tides_ztf.get_targets(pipeline_id=pipeline_id, topic=topic, group_id=group_id)
     return targets
 
 #TODO: Create LSST module
 @task(cache_policy=NO_CACHE)
-def fetch_lsst_targets():
+def fetch_lsst_targets(engine, pipeline_name=None, pipeline_version=None, topic=None, group_id=None):
     """
-    Calls the opr4_lsst module to get the latest list of targets.
+    Calls the tides_lsst module to get the latest list of targets.
     """
-    print("Fetching targets from opr4_lsst...")
-    targets = opr4_lsst.get_targets()
+    pipeline_name = pipeline_name or os.getenv('LSST_PIPELINE_NAME', 'TiDES-LSST-default')
+    pipeline_version = pipeline_version or os.getenv('LSST_PIPELINE_VERSION', 'v1.0')
+    topic = topic or os.getenv('LASAIR_LSST_TOPIC', 'lasair_16TiDES_Frohmaier_et_al_2025')
+    group_id = group_id or 'delta-opr4'+str(np.random.randint(0, 1000))
+
+    print(f"Fetching targets from tides_lsst using pipeline: {pipeline_name} ({pipeline_version})...")
+
+    if engine is not None:
+        query = sqlalchemy.text("SELECT pipeline_id FROM pipelines WHERE pipeline_name = :n AND version = :v")
+        with engine.connect() as conn:
+            result = conn.execute(query, {'n': pipeline_name, 'v': pipeline_version}).fetchone()
+        
+        if not result:
+            raise ValueError(f"CRITICAL FIX REQUIRED: Pipeline '{pipeline_name}' version '{pipeline_version}' does not exist in the database.")
+            
+        pipeline_id = int(result[0])
+    else:
+        print(f"DEV MODE: Bypassing DB check for pipeline {pipeline_name}...")
+        pipeline_id = -1
+        
+    targets = tides_lsst.get_targets(pipeline_id=pipeline_id, topic=topic, group_id=group_id)
     return targets
 
 @task(cache_policy=NO_CACHE)
@@ -212,7 +252,7 @@ def createTransientStage(dataTable, cnx):
     dataTable.columns = map(str.lower, dataTable.columns)
     cols_with_types = ", ".join([f"{name} {map_dtype(dtype)}" for name, dtype in dataTable.dtypes.items()])
     cnx.execute(sqlalchemy.text(f"CREATE TEMPORARY TABLE tides_stage ({cols_with_types})"))
-    dataTable[dataTable['pass']==True].to_sql('tides_stage', con=cnx, if_exists='append', index=False)
+    dataTable.to_sql('tides_stage', con=cnx, if_exists='append', index=False)
     ## Below is faster when millions of rows, we are not at that stage
     # dataTable.head(0)to_sql('tides_stage', con=cnx, index=False, if_exists='replace') # head(0) uses only the header
     # # set index=False to avoid bringing the dataframe index in as a column 
@@ -238,15 +278,9 @@ def upsertToMaster(cnx):
   # Convert to pandas DataFrame
   upsertStage = pd.DataFrame(result)
   
-  # Populate the surveys junction table
-  mapping_query = """
-  INSERT INTO surveys (tides_id, source_survey_id, transient_name)
-  SELECT tm.tides_id, ts.survey_id, ts.object_id
-  FROM tides_stage ts
-  JOIN tides_master tm ON q3c_radial_query(ts.ra, ts.dec, tm.ra, tm.dec, 0.000277778)
-  ON CONFLICT DO NOTHING;
-  """
-  cnx.execute(sqlalchemy.text(mapping_query))
+  # Populate the surveys and pipeline_selections junction tables
+  with open('./sql_tasks/insertSurveysAndPipelines.sql', 'r') as map_query:
+      cnx.execute(sqlalchemy.text(map_query.read()))
   
   return upsertStage
 
@@ -373,24 +407,39 @@ def updateTiDESMasterwith4MOSTKey(newTable, cnx):
   query.close()
 
 @flow(name="delta OPR4 Workflow")
-def run_opr4_workflow():
+def run_target_workflow(connect_db=False):
     """
     The main Prefect flow for the OPR4 process.
+    # The columns we need are:
+    # object_id
+    # survey_id
+    # ra
+    # dec
+    # jdmin
+    # jdmax
+    # latest_filter - this is a JSON array
+    # latest_mag - this is a JSON array
+    # n_sources - this is a JSON array
+    # pipeline_id
     """
-    neededTargetColumns = ['object_id', 'survey_id', 'ra', 'dec', 'jdmin', 'jdmax', 'latest_filter', 'latest_mag']
+    neededTargetColumns = ['object_id', 'survey_id', 'pipeline_id', 'ra', 'dec', 'jdmin', 'jdmax', 'latest_filter', 'latest_mag', 'n_sources']
+
     
     # 1. Load configuration and credentials
     load_credentials()
     
     allSourceSurveys =[] #This will hold the different source survey tables to be concatenated later
 
-    # 2. Fetch targets from the ZTF stream (via opr4_ztf)
-    ztf_targets = fetch_ztf_targets()
-    
-    if len(ztf_targets) > 0:
-        #Trim the targets to the columns needed for the master table
-        ztf4master = ztf_targets[neededTargetColumns]
-        allSourceSurveys.append(ztf4master)
+        
+
+    # 2. Fetch targets from the different surveys
+    # Only targets that pass a selection filter should make it this far
+    engine = sqlalchmey_engine() if connect_db else None
+    lsst_targets = fetch_lsst_targets(engine=engine)
+    print(lsst_targets)
+    sys.exit()
+    #ztf_targets = fetch_ztf_targets()
+
     
     if len(allSourceSurveys) == 0:
         print('!!! No Transients !!!')
@@ -398,7 +447,7 @@ def run_opr4_workflow():
         
     ## Combine all the targets into a single DataFrame
     ## If adding LSST, do it here
-    allTargets = pd.concat(allSourceSurveys) ## Combine all targets into a single DataFrame
+    allTargets = pd.concat([x for x in [lsst_targets] if len(x) > 0]) ## Combine all targets into a single DataFrame
 
     if len(allTargets) == 0:
         #print('!!! No Transients !!!')
@@ -409,12 +458,13 @@ def run_opr4_workflow():
     # e.g. allTargets['pass'] = allTargets.apply(lambda row: row['gmag'] < 22 and row['rmag'] < 22, axis=1)
     # TODO: Add selection criteria
     # For now, just pass everything
-    allTargets['pass'] = True
+    #allTargets['pass'] = True
 
     
-    engine = sqlalchmey_engine() ## Create the connection to the TiDES DB
-
     # 4. Let's start doing Database tasks
+    if engine is None:
+        print("DEV MODE: Fetched targets successfully. Skipping DB operations.")
+        return None
 
     with engine.connect() as conn:
 
@@ -487,4 +537,4 @@ def run_opr4_workflow():
     conn.close()
 
 if __name__ == "__main__":
-    run_opr4_workflow()
+    run_target_workflow(connect_db=False)

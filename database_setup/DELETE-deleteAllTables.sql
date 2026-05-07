@@ -1,5 +1,7 @@
 -- Drop tables in reverse order of dependency to be safe, 
 -- though CASCADE handles constraints.
+DROP TABLE IF EXISTS pipeline_selections CASCADE;
+DROP TABLE IF EXISTS pipelines CASCADE;
 DROP TABLE IF EXISTS surveys CASCADE;
 DROP TABLE IF EXISTS survey_ids CASCADE;
 DROP TABLE IF EXISTS tides_ztf CASCADE;

@@ -12,3 +12,4 @@ confluent-kafka
 # Note: submit_transients is a local module (not included here)
 python-dotenv
 tabulate
+requests

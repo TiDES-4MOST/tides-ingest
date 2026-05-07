@@ -1,12 +1,12 @@
 """
-opr4_lsst.py
+tides_lsst.py
 
 This module contains the logic for connecting to the Lasair API and importing transients from a stream.
 It is designed to be imported by opr4_controller.py.
 
 Usage:
-    import opr4_lsst
-    targets = opr4_lsst.get_targets()
+    import tides_lsst
+    targets = tides_lsst.get_targets()
 """
 
 import pandas as pd
@@ -75,17 +75,13 @@ def ingest_report(recentUniqueObjects):
 
     return markdown_report
 
-def connect_lasair():
+def connect_lasair(topic, group_id):
     """
     Establishes a connection to the Lasair API.
 
     Returns:
         lasair_consumer object: The consumer object to poll for messages.
     """
-    # Load configuration settings from environment variables
-    topic = os.getenv('LASAIR_LSST_TOPIC')
-    #group_id = os.getenv('LASAIR_LSST_GROUP_ID') # TODO: Uncomment for production
-    group_id = 'opr4'+str(np.random.randint(0, 1000))
     token = os.getenv('LASAIR_LSST_TOKEN')
     
     # Check if credentials are set
@@ -93,7 +89,7 @@ def connect_lasair():
         print("Warning: Lasair LSST credentials not fully set in .env")
 
     # TODO: Initialize Lasair consumer
-    consumer = lasair.lasair_consumer('kafka.lsst.ac.uk:9092', group_id, topic)
+    consumer = lasair.lasair_consumer('lasair-lsst-kafka.lsst.ac.uk:9092', group_id, topic)
     
     print(f"Connecting to Lasair topic {topic} with group {group_id}...")
     return consumer
@@ -107,6 +103,8 @@ def get_latest_batch(consumer):
 
     Returns:
         pd.DataFrame: A DataFrame containing the recent objects from the stream.
+
+
     """
     recentObjects = pd.DataFrame()
   
@@ -125,7 +123,7 @@ def get_latest_batch(consumer):
         recentObjects = pd.concat([recentObjects,mostRecentComm], ignore_index=True)
     #print('Length Recent Objects: ', len(recentObjects))
     if len(recentObjects)!=0:
-        recentUniqueObjects = recentObjects.sort_values("jdmax", ascending = False).drop_duplicates(subset=["objectId"], inplace=False, keep="first")
+        recentUniqueObjects = recentObjects.sort_values("lastDiaSourceMjdTai", ascending = False).drop_duplicates(subset=["diaObjectId"], inplace=False, keep="first")
     else: recentUniqueObjects = recentObjects
     #print('Recent LSST Object: ',recentObjects)
 
@@ -134,17 +132,58 @@ def get_latest_batch(consumer):
     return recentUniqueObjects
     
 
-def process_transients(raw_data):
+def process_transients(raw_data, pipeline_id):
     """
     Filters and formats the raw transient data to meet the standard
     tides-ingest contract.
+
+    Here are the columns from the LSST stream:
+        objects.diaObjectId,
+        objects.ra,
+        objects.decl,
+        objects.lastDiaSourceMjdTai,
+        objects.firstDiaSourceMjdTai,
+        objects.latest_psfFlux,
+        objects.g_psfFlux,
+        objects_ext.g_psfFluxSigma,
+        objects.g_latestMJD,
+        objects.r_psfFlux,
+        objects_ext.r_psfFluxSigma,
+        objects.r_latestMJD,
+        objects.i_psfFlux,
+        objects_ext.i_psfFluxSigma,
+        objects.i_latestMJD,
+        objects.z_psfFlux,
+        objects_ext.z_psfFluxSigma,
+        objects.z_latestMJD,
+        objects.nPosDiaSources,
+        objects.nPosDiaSourcesNights,
+        objects.ngSources,
+        objects.nrSources,
+        objects.niSources,
+        objects.nzSources,
+        objects.nPosDiaSourcesNights,
+        sherlock_classifications.classification as sherlock_classifications
     """
     if raw_data is None or raw_data.empty:
-        return pd.DataFrame(columns=['object_id', 'survey_id', 'ra', 'dec', 'jdmin', 'jdmax', 'latest_filter', 'latest_mag'])
+        return None
+
+    # Now we need to make sure the data frame columns are reformatted to match the tides-ingest contract
+    # The columns we need are:
+    # object_id
+    # survey_id
+    # ra
+    # dec
+    # jdmin
+    # jdmax
+    # latest_filter - this is a JSON array
+    # latest_mag - this is a JSON array
+    # n_sources - this is a JSON array
 
     out_df = pd.DataFrame()
-    out_df['object_id'] = raw_data.get('objectId', raw_data.get('id', pd.Series(dtype='str')))
+    out_df['object_id'] = raw_data.get('diaObjectId', raw_data.get('id', pd.Series(dtype='str')))
     out_df['survey_id'] = 1  # integer id for LSST
+    out_df['pipeline_id'] = pipeline_id # Setting dynamic pipeline ID from args
     out_df['ra'] = raw_data.get('ra', pd.Series(dtype='float'))
     
     if 'decl' in raw_data.columns:
@@ -152,27 +191,39 @@ def process_transients(raw_data):
     else:
         out_df['dec'] = raw_data.get('dec', pd.Series(dtype='float'))
         
-    out_df['jdmin'] = raw_data.get('jdmin', pd.Series(dtype='float'))
-    out_df['jdmax'] = raw_data.get('jdmax', pd.Series(dtype='float'))
+    out_df['jdmin'] = raw_data.get('firstDiaSourceMjdTai', pd.Series(dtype='float'))
+    out_df['jdmax'] = raw_data.get('lastDiaSourceMjdTai', pd.Series(dtype='float'))
 
-    # TODO: Calculate the number of detections per filter from raw data
-    # You indicated you will manually implement this per-filter extracting logic.
-    # We assign a default value of 1 for now to fulfill the schema contract.
-    out_df['n_sources'] = 1
+
+    import json
+    #out_df['n_sources'] = [{'g_lsst': raw_data.get('ngSources', pd.Series(dtype='int')), 'r_lsst': raw_data.get('nrSources', pd.Series(dtype='int')), 'i_lsst': raw_data.get('niSources', pd.Series(dtype='int')), 'z_lsst': raw_data.get('nzSources', pd.Series(dtype='int'))}]
+    
+    out_df['n_sources'] = raw_data.apply(lambda row: json.dumps({
+        'g_lsst': row.get('ngSources', default=0),
+        'r_lsst': row.get('nrSources', default=0),
+        'i_lsst': row.get('niSources', default=0),
+        'z_lsst': row.get('nzSources', default=0)
+    }), axis=1)
 
     # Derive standard magnitude/filter fields
-    if 'latestFilter' in raw_data.columns and 'latestMag' in raw_data.columns:
-         out_df['latest_filter'] = raw_data['latestFilter'].astype(str)
-         out_df['latest_mag'] = raw_data['latestMag'].astype(float)
-    else:
-         # Simplified fallback, customize once LSST JSON object schema is finalised
-         out_df['latest_filter'] = 'unknown'
-         out_df['latest_mag'] = 29.99
+    out_df['latest_filter'] = raw_data.apply(lambda row: json.dumps({
+        'g_lsst': row.get('g_latestMJD', default=0),
+        'r_lsst': row.get('r_latestMJD', default=0),
+        'i_lsst': row.get('i_latestMJD', default=0),
+        'z_lsst': row.get('z_latestMJD', default=0)
+    }), axis=1)
+
+    out_df['latest_mag'] = raw_data.apply(lambda row: json.dumps({
+        'g_lsst': -2.5*np.log10(row.get('g_psfFlux', default=1e-10))+31.4,
+        'r_lsst': -2.5*np.log10(row.get('r_psfFlux', default=1e-10))+31.4,
+        'i_lsst': -2.5*np.log10(row.get('i_psfFlux', default=1e-10))+31.4,
+        'z_lsst': -2.5*np.log10(row.get('z_psfFlux', default=1e-10))+31.4
+    }), axis=1)
 
     print(f"Processed {len(out_df)} transients from LSST.")
     return out_df
 
-def get_targets():
+def get_targets(pipeline_id, topic, group_id):
     """
     The main entry point for the controller.
     
@@ -180,16 +231,16 @@ def get_targets():
     ready for the controller.
 
     Returns:
-        list: A list of dictionary objects representing the targets and their properties.
+        list: A list of dict-like objects representing the targets and their properties.
     """
     # 1. Connect to Lasair
-    consumer = connect_lasair()
+    consumer = connect_lasair(topic, group_id)
     
     # 2. Get the latest batch of data
     latest_transients = get_latest_batch(consumer)
     
     # 3. Process and filter the data
-    targets = process_transients(latest_transients)
+    targets = process_transients(latest_transients, pipeline_id)
 
     
     return targets
