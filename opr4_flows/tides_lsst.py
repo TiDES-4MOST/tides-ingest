@@ -195,29 +195,34 @@ def process_transients(raw_data, pipeline_id):
     out_df['jdmax'] = raw_data.get('lastDiaSourceMjdTai', pd.Series(dtype='float'))
 
 
-    import json
-    #out_df['n_sources'] = [{'g_lsst': raw_data.get('ngSources', pd.Series(dtype='int')), 'r_lsst': raw_data.get('nrSources', pd.Series(dtype='int')), 'i_lsst': raw_data.get('niSources', pd.Series(dtype='int')), 'z_lsst': raw_data.get('nzSources', pd.Series(dtype='int'))}]
-    
+    def safe_mag(flux, offset=31.4, fallback=1e-10):
+        # Fallback if flux is None, NaN, or <= 0
+        try:
+            val = float(flux) if (flux is not None and not pd.isna(flux) and flux > 0) else fallback
+        except (ValueError, TypeError):
+            val = fallback
+        return -2.5 * np.log10(val) + offset
+
     out_df['n_sources'] = raw_data.apply(lambda row: json.dumps({
-        'g_lsst': row.get('ngSources', default=0),
-        'r_lsst': row.get('nrSources', default=0),
-        'i_lsst': row.get('niSources', default=0),
-        'z_lsst': row.get('nzSources', default=0)
+        'g_lsst': int(row.get('ngSources')) if pd.notnull(row.get('ngSources')) else 0,
+        'r_lsst': int(row.get('nrSources')) if pd.notnull(row.get('nrSources')) else 0,
+        'i_lsst': int(row.get('niSources')) if pd.notnull(row.get('niSources')) else 0,
+        'z_lsst': int(row.get('nzSources')) if pd.notnull(row.get('nzSources')) else 0
     }), axis=1)
 
     # Derive standard magnitude/filter fields
     out_df['latest_filter'] = raw_data.apply(lambda row: json.dumps({
-        'g_lsst': row.get('g_latestMJD', default=0),
-        'r_lsst': row.get('r_latestMJD', default=0),
-        'i_lsst': row.get('i_latestMJD', default=0),
-        'z_lsst': row.get('z_latestMJD', default=0)
+        'g_lsst': float(row.get('g_latestMJD')) if pd.notnull(row.get('g_latestMJD')) else 0.0,
+        'r_lsst': float(row.get('r_latestMJD')) if pd.notnull(row.get('r_latestMJD')) else 0.0,
+        'i_lsst': float(row.get('i_latestMJD')) if pd.notnull(row.get('i_latestMJD')) else 0.0,
+        'z_lsst': float(row.get('z_latestMJD')) if pd.notnull(row.get('z_latestMJD')) else 0.0
     }), axis=1)
 
     out_df['latest_mag'] = raw_data.apply(lambda row: json.dumps({
-        'g_lsst': -2.5*np.log10(row.get('g_psfFlux', default=1e-10))+31.4,
-        'r_lsst': -2.5*np.log10(row.get('r_psfFlux', default=1e-10))+31.4,
-        'i_lsst': -2.5*np.log10(row.get('i_psfFlux', default=1e-10))+31.4,
-        'z_lsst': -2.5*np.log10(row.get('z_psfFlux', default=1e-10))+31.4
+        'g_lsst': safe_mag(row.get('g_psfFlux')),
+        'r_lsst': safe_mag(row.get('r_psfFlux')),
+        'i_lsst': safe_mag(row.get('i_psfFlux')),
+        'z_lsst': safe_mag(row.get('z_psfFlux'))
     }), axis=1)
 
     print(f"Processed {len(out_df)} transients from LSST.")

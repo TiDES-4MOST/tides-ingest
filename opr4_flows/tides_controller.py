@@ -237,7 +237,7 @@ def submit_to_4most(targets):
 
 def map_dtype(series):
     if types.is_integer_dtype(series):
-        return "INTEGER"
+        return "BIGINT"
     if types.is_float_dtype(series):
         return "DOUBLE PRECISION"
     if types.is_datetime64_any_dtype(series):  # Handles both naive and aware
@@ -251,6 +251,7 @@ def createTransientStage(dataTable, cnx):
     
     dataTable.columns = map(str.lower, dataTable.columns)
     cols_with_types = ", ".join([f"{name} {map_dtype(dtype)}" for name, dtype in dataTable.dtypes.items()])
+    cnx.execute(sqlalchemy.text("DROP TABLE IF EXISTS tides_stage"))
     cnx.execute(sqlalchemy.text(f"CREATE TEMPORARY TABLE tides_stage ({cols_with_types})"))
     dataTable.to_sql('tides_stage', con=cnx, if_exists='append', index=False)
     ## Below is faster when millions of rows, we are not at that stage
@@ -407,7 +408,7 @@ def updateTiDESMasterwith4MOSTKey(newTable, cnx):
   query.close()
 
 @flow(name="delta OPR4 Workflow")
-def run_target_workflow(connect_db=False):
+def run_target_workflow(connect_db=True, test_mode=False):
     """
     The main Prefect flow for the OPR4 process.
     # The columns we need are:
@@ -423,71 +424,88 @@ def run_target_workflow(connect_db=False):
     # pipeline_id
     """
     neededTargetColumns = ['object_id', 'survey_id', 'pipeline_id', 'ra', 'dec', 'jdmin', 'jdmax', 'latest_filter', 'latest_mag', 'n_sources']
-
     
     # 1. Load configuration and credentials
     load_credentials()
     
-    allSourceSurveys =[] #This will hold the different source survey tables to be concatenated later
-
-        
+    allSourceSurveys = [] #This will hold the different source survey tables to be concatenated later
 
     # 2. Fetch targets from the different surveys
     # Only targets that pass a selection filter should make it this far
     engine = sqlalchmey_engine() if connect_db else None
-    lsst_targets = fetch_lsst_targets(engine=engine)
-    print(lsst_targets)
-    sys.exit()
-    #ztf_targets = fetch_ztf_targets()
-
     
+    if test_mode:
+        print("=== RUNNING IN TEST MODE ===")
+        import sys
+        sys.path.append('.')
+        from testing import mock_streams
+        lsst_targets = mock_streams.generate_mock_lsst_targets()
+        ztf_targets = mock_streams.generate_mock_ztf_targets()
+        allSourceSurveys.extend([lsst_targets, ztf_targets])
+    else:
+        lsst_targets = fetch_lsst_targets(engine=engine)
+        #ztf_targets = fetch_ztf_targets()
+        
+        ## Here we add all the source surveys to the list
+        allSourceSurveys.append(lsst_targets)
+
     if len(allSourceSurveys) == 0:
         print('!!! No Transients !!!')
         return None
         
     ## Combine all the targets into a single DataFrame
     ## If adding LSST, do it here
-    allTargets = pd.concat([x for x in [lsst_targets] if len(x) > 0]) ## Combine all targets into a single DataFrame
+    allTargets = pd.concat([x for x in allSourceSurveys if len(x) > 0]) ## Combine all targets into a single DataFrame
 
     if len(allTargets) == 0:
-        #print('!!! No Transients !!!')
+        #print('!!! No Transients from anyone!!!')
         return None
-    #print('All transients: ', len(allTargets))
-    # 3. Check whether objects Pass addition slection criteria
-    # and add a column 'pass' to the DataFrame
-    # e.g. allTargets['pass'] = allTargets.apply(lambda row: row['gmag'] < 22 and row['rmag'] < 22, axis=1)
-    # TODO: Add selection criteria
-    # For now, just pass everything
-    #allTargets['pass'] = True
 
-    
-    # 4. Let's start doing Database tasks
     if engine is None:
         print("DEV MODE: Fetched targets successfully. Skipping DB operations.")
         return None
 
+    # We must process each survey's dataframe independently (sequentially) 
+    # instead of concatenating them all into one giant batch. 
+    # If we concatenate them, ZTF and LSST objects arrive in tides_stage at the exact same time 
+    # and both get inserted into tides_master as separate rows because tides_master was empty.
+    # By processing sequentially, LSST is inserted first, and then ZTF correctly triggers the UPDATE logic.
+    
+    upserted_dataframes = []
+    changed_states = []
     with engine.connect() as conn:
-
-        createTransientStage(allTargets, conn) ## Create a temporary table for the recent detections
-        
-        upsertedData = upsertToMaster(conn) ## Upsert Recent data into the master table
-        #conn.commit()
-        print(upsertedData[['survey_id','tides_id']])
-        #print(upsertedData[['tides_id','pk_4most','old_status','active']])
-        sys.exit()
-        id_ChangeState = upsertedData[['tides_id', 'pk_4most', 'active']]\
-            [(upsertedData['old_status'] != upsertedData['active']) & (upsertedData['pk_4most'].notnull())]
-        #print('Change State',id_ChangeState)
-        #upsertStaged2(upsertedData,conn) ## Upsert the recent data into the staged2 table
-                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                              
+        for survey_targets in allSourceSurveys:
+            if len(survey_targets) == 0:
+                continue
+                
+            createTransientStage(survey_targets, conn) ## Create a temporary table for the recent detections
+            
+            upsertedData = upsertToMaster(conn) ## Upsert Recent data into the master table
+            print(upsertedData[['tides_id', 'name']])
+            
+            id_ChangeState = upsertedData[['tides_id', 'pk_4most', 'active']]\
+                [(upsertedData['old_status'] != upsertedData['active']) & (upsertedData['pk_4most'].notnull())]
+                
+            upserted_dataframes.append(upsertedData)
+            changed_states.append(id_ChangeState)
+            
+        # Combine all upserted results for reporting
+        if len(upserted_dataframes) > 0:
+            finalUpsertedData = pd.concat(upserted_dataframes, ignore_index=True)
+            id_ChangeState = pd.concat(changed_states, ignore_index=True)
+        else:
+            finalUpsertedData = pd.DataFrame()
+            id_ChangeState = pd.DataFrame()
+                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                               
         deactivate_TiDES_IDs_All = deactivateUnobservedTransients(conn)
         conn.commit()
+        
         if len(deactivate_TiDES_IDs_All)>0:
             deactivate_TiDES_IDs = deactivate_TiDES_IDs_All[~deactivate_TiDES_IDs_All['pk_4most'].isnull()]
         else:
             deactivate_TiDES_IDs = []
             
-        
+        sys.exit()
         
         #print(deactivate_TiDES_IDs)
         
@@ -537,4 +555,4 @@ def run_target_workflow(connect_db=False):
     conn.close()
 
 if __name__ == "__main__":
-    run_target_workflow(connect_db=False)
+    run_target_workflow(connect_db=True, test_mode=True)

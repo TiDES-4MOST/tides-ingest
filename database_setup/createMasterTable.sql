@@ -27,7 +27,7 @@ CREATE INDEX IF NOT EXISTS idx_tides_master_pk_4most ON tides_master(pk_4most);
 CREATE INDEX IF NOT EXISTS idx_tides_master_ra_dec ON tides_master (q3c_ang2ipix(ra, dec));
 --
 -- Create a sequence for name, i.e. TiDES26aaa
-CREATE SEQUENCE tides_seq MAXVALUE 474551 CYCLE;
+CREATE SEQUENCE IF NOT EXISTS tides_seq MINVALUE 0 MAXVALUE 474551 CYCLE;
 --
 -- Creating the aaa, aab, ... zzz, aaaa, aaab ... zzzz, etc.
 CREATE OR REPLACE FUNCTION to_dynamic_alpha(val integer) RETURNS text AS $$
@@ -45,10 +45,10 @@ $$ LANGUAGE plpgsql IMMUTABLE;
 CREATE OR REPLACE FUNCTION trg_fn_generate_tides_name() RETURNS TRIGGER AS $$
 DECLARE current_yy text := to_char(current_date, 'YY');
 last_yy text;
-BEGIN -- Updated: substring starts at 9 because 'TiDES-SN' is 8 chars long
+BEGIN -- Extract year from 'TiDES26aaa' format. 'TiDES' is 5 chars, year starts at 6.
 SELECT substring(
         name
-        from 9 for 2
+        from 6 for 2
     ) INTO last_yy
 FROM tides_master
 ORDER BY tides_id DESC
@@ -61,5 +61,6 @@ NEW.name := 'TiDES' || current_yy || to_dynamic_alpha(nextval('tides_seq')::int)
 RETURN NEW;
 END;
 $$ LANGUAGE plpgsql;
+DROP TRIGGER IF EXISTS tides_name_auto_generator ON tides_master;
 CREATE TRIGGER tides_name_auto_generator BEFORE
 INSERT ON tides_master FOR EACH ROW EXECUTE FUNCTION trg_fn_generate_tides_name();
