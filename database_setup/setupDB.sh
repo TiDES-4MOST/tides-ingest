@@ -68,3 +68,4 @@ psql -h "$HOST" -U "$USER" -d "$NAME" -f surveyIDs.sql
 psql -h "$HOST" -U "$USER" -d "$NAME" -f surveyConnector.sql
 psql -h "$HOST" -U "$USER" -d "$NAME" -f pipelines.sql
 psql -h "$HOST" -U "$USER" -d "$NAME" -f pipelineSelections.sql
+psql -h "$HOST" -U "$USER" -d "$NAME" -f createHostTable.sql

@@ -1,5 +1,6 @@
 -- Drop tables in reverse order of dependency to be safe, 
 -- though CASCADE handles constraints.
+DROP TABLE IF EXISTS tides_host CASCADE;
 DROP TABLE IF EXISTS pipeline_selections CASCADE;
 DROP TABLE IF EXISTS pipelines CASCADE;
 DROP TABLE IF EXISTS surveys CASCADE;
@@ -18,3 +19,5 @@ DROP TABLE IF EXISTS tides_master CASCADE;
 ALTER SEQUENCE IF EXISTS tides_master_tides_id_seq RESTART WITH 1;
 -- tides_seq is explicitly created for the naming function
 ALTER SEQUENCE IF EXISTS tides_seq RESTART WITH 1;
+-- tides_host_host_id_seq sequence reset
+ALTER SEQUENCE IF EXISTS tides_host_host_id_seq RESTART WITH 1;

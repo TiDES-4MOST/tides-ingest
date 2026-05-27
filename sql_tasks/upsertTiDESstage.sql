@@ -24,6 +24,7 @@ updated_rows AS (
     WHERE q3c_radial_query(ts.ra, ts.dec, tm.ra, tm.dec, 0.000277778)
     RETURNING tm.*
 ),
+-- This is the point to cross-match Dylan's AGN rejection
 inserted_rows AS (
     -- 3. Insert fresh, unmatched transients.
     INSERT INTO tides_master (
