@@ -13,4 +13,5 @@ VALUES ('TiDES-LSST-default', 'v1.0'),
     ('TiDES-GOTO-default', 'v1.0'),
     ('TiDES-HSC-default', 'v1.0'),
     ('TiDES-BlackGEM-default', 'v1.0'),
-    ('TiDES-TNS-default', 'v1.0') ON CONFLICT (pipeline_id) DO NOTHING;
+    ('TiDES-TNS-default', 'v1.0'),
+    ('sherlock', 'v1.0') ON CONFLICT (pipeline_name, version) DO NOTHING;

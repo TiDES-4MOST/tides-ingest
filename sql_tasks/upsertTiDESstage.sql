@@ -12,6 +12,7 @@ updated_rows AS (
     UPDATE tides_master tm
     SET jdmax = GREATEST(tm.jdmax, ts.jdmax), -- Ensure we never roll back the max julian date
         active = True,
+        sync_pending = CASE WHEN tm.active = False THEN True ELSE tm.sync_pending END,
         -- Merging the new magnitude finding into our JSONB dictionary.
         -- We construct a new key-value pair using the incoming filter (e.g. 'g') and magnitude (e.g. 21.0), 
         -- and concatenate it (||) with the existing latest_mags JSON object. 

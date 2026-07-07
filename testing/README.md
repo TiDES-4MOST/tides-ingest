@@ -44,3 +44,42 @@ Inspect your database using a GUI (like pgAdmin or DBeaver) or a database CLI to
 - **`tides_master` Table**: Ensure the correct number of unique transients were created (e.g., matching transients shouldn't create duplicate rows).
 - **`surveys` Junction Table**: Check to ensure multi-survey objects (like our ZTF/LSST spatial match) are correctly mapped. You should see two different `source_survey_id` entries linked to the single `tides_id`.
 - **JSONB Columns**: Check the `latest_mags` column to ensure records successfully `COALESCE` and merge incoming dictionary keys without overwriting other survey filter bands.
+
+---
+
+## 4MOST Downtime & Fallback Testing
+
+To verify the resilience of the pipeline when the 4MOST API is down, you can run the automated integration test:
+
+```bash
+python testing/test_4most_downtime.py
+```
+
+### Manual Downtime Verification Workflow
+If you want to manually test the fallback behavior of the orchestrator, follow these steps:
+
+1. **Point 4MOST to a Bogus Host**:
+   In your python environment or test runner, mock the schema URL variable on the `submit_transients` module before running the workflow:
+   ```python
+   import submit_transients as st
+   st.URL_SCHEMA = "https://invalid-host-4most-down.mpe.mpg.de/"
+   ```
+2. **Execute the Pipeline**:
+   Run the controller normally (or in `test_mode`). The pipeline will complete successfully without raising exceptions.
+3. **Verify Local Database State**:
+   Inspect the `tides_master` table:
+   - Transients are fully created/updated.
+   - The `sync_pending` column is `True`.
+   - The `pk_4most` column is `null`.
+4. **Restore Connection & Sync**:
+   Restore the correct `st.URL_SCHEMA` to point to the active 4MOST API, and run the sync task:
+   ```python
+   with engine.connect() as conn:
+       tides_controller.sync_pending_to_4most(conn)
+       conn.commit()
+   ```
+5. **Verify Final State**:
+   Check the `tides_master` table again:
+   - The `sync_pending` column has cleared to `False`.
+   - The `pk_4most` column is updated with the returned 4MOST IDs.
+

@@ -121,7 +121,7 @@ def get_latest_batch(consumer):
         recentObjects = pd.concat([recentObjects,mostRecentComm], ignore_index=True)
     #print('Length Recent Objects: ', len(recentObjects))
     if len(recentObjects)!=0:
-        recentUniqueObjects = recentObjects.sort_values("jdmax", ascending = False).drop_duplicates(subset=["objectId"], inplace=False, keep="first")
+        recentUniqueObjects = recentObjects.sort_values("latest_jd", ascending = False).drop_duplicates(subset=["objectId"], inplace=False, keep="first")
     else: recentUniqueObjects = recentObjects
     #print('Recent ZTF Object: ',recentObjects)
 
@@ -149,8 +149,8 @@ def process_transients(raw_data, pipeline_id):
     else:
         out_df['dec'] = raw_data.get('dec', pd.Series(dtype='float'))
         
-    out_df['jdmin'] = raw_data.get('jdmin', pd.Series(dtype='float'))
-    out_df['jdmax'] = raw_data.get('jdmax', pd.Series(dtype='float'))
+    out_df['jdmin'] = raw_data.get('first_jd', pd.Series(dtype='float'))
+    out_df['jdmax'] = raw_data.get('latest_jd', pd.Series(dtype='float'))
 
     # Determine filter key
     if 'latestFilter' in raw_data.columns and 'latestMag' in raw_data.columns:
@@ -158,7 +158,7 @@ def process_transients(raw_data, pipeline_id):
          raw_mag = raw_data['latestMag'].astype(float)
     elif 'gmag' in raw_data.columns and 'rmag' in raw_data.columns:
          raw_mag = raw_data['gmag'].fillna(raw_data['rmag'])
-         filter_key = np.where(raw_data['gmag'].notnull(), 'g_ztf', 'r_ztf')
+         filter_key = pd.Series(np.where(raw_data['gmag'].notnull(), 'g_ztf', 'r_ztf'), index=raw_data.index)
     else:
          filter_key = pd.Series('unknown_ztf', index=raw_data.index)
          raw_mag = pd.Series(29.99, index=raw_data.index)

@@ -18,6 +18,7 @@ CREATE TABLE IF NOT EXISTS tides_master(
     -- Stores the cumulative number of detections for each filter independently
     n_sources JSONB DEFAULT '{}'::jsonb,
     active BOOL DEFAULT FALSE,
+    sync_pending BOOL DEFAULT TRUE,
     created TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
     updated TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
 );

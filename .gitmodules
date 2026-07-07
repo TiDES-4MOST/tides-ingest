@@ -1,0 +1,3 @@
+[submodule "host_tools/tides_host_matching"]
+	path = host_tools/tides_host_matching
+	url = https://github.com/TiDES-4MOST/tides_host_matching.git

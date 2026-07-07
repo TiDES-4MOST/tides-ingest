@@ -22,9 +22,11 @@ WHERE active = True
     );
 --- Update the master table to deactivate the objects
 UPDATE tides_master
-SET active = False
+SET active = False,
+    sync_pending = True
 FROM to_deactivate
 WHERE to_deactivate.tides_id = tides_master.tides_id
 RETURNING tides_master.tides_id,
     tides_master.pk_4most,
-    tides_master.active;
+    tides_master.active,
+    tides_master.sync_pending;
