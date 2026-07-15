@@ -20,7 +20,7 @@ from prefect.cache_policies import NO_CACHE
 # Add root and opr4_flows directories to sys.path so we can import submit_transients
 ROOT_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.append(ROOT_DIR)
-sys.path.append(os.path.join(ROOT_DIR, 'opr4_flows'))
+sys.path.append(os.path.join(ROOT_DIR, 'tides_flows'))
 
 import submit_transients as st
 

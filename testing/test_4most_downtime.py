@@ -16,7 +16,7 @@ from dotenv import load_dotenv
 
 # Ensure the root and opr4_flows directories are in the import path
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-sys.path.append(os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), 'opr4_flows'))
+sys.path.append(os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), 'tides_flows'))
 
 import tides_controller
 import submit_transients as st

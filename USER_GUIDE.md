@@ -258,14 +258,14 @@ $$ LANGUAGE plpgsql;
 
 ## 3. Transient Ingestion Pipeline
 
-The transient ingestion is orchestrated by the `run_target_workflow` Prefect flow in [tides_controller.py](opr4_flows/tides_controller.py).
+The transient ingestion is orchestrated by the `run_target_workflow` Prefect flow in [tides_controller.py](tides_flows/tides_controller.py).
 
 ### 1. Ingestion Flow Steps
 
 1. **Load Credentials**: Reads database and API configurations from the environment.
 2. **Stream Fetching**: Calls survey plugin functions in parallel or sequence:
-   - `fetch_lsst_targets()` ([tides_lsst.py](opr4_flows/tides_lsst.py))
-   - `fetch_ztf_targets()` ([tides_ztf.py](opr4_flows/tides_ztf.py))
+   - `fetch_lsst_targets()` ([tides_lsst.py](tides_flows/tides_lsst.py))
+   - `fetch_ztf_targets()` ([tides_ztf.py](tides_flows/tides_ztf.py))
 3. **Data standardisation**: Each plugin processes raw JSON alerts into standard DataFrames containing the required contract columns:
    - `object_id`, `survey_id`, `pipeline_id`, `ra`, `dec`, `jdmin`, `jdmax`, `latest_filter`, `latest_mag`, `n_sources`.
 4. **Temporary Staging**: Inserts alerts into a temporary SQL table `tides_stage`.
@@ -373,7 +373,7 @@ When a host galaxy is submitted to 4MOST, it is registered under specific survey
 
 ## 5. 4MOST API Integration & State Sync
 
-The pipeline interacts with the RESTful 4MOST transients API via the utility module [submit_transients.py](opr4_flows/submit_transients.py).
+The pipeline interacts with the RESTful 4MOST transients API via the utility module [submit_transients.py](tides_flows/submit_transients.py).
 
 ### 1. API Actions (CRUD)
 
@@ -464,7 +464,7 @@ This script executes the SQL tables and trigger creations in the correct depende
 #### 1. Execute Transient Pipeline Locally
 To run the ingestion controller manually:
 ```bash
-python opr4_flows/tides_controller.py
+python tides_flows/tides_controller.py
 ```
 
 #### 2. Execute Host Matching Locally
@@ -477,7 +477,7 @@ python host_tools/tides_host_matching/tides_match_gal_local.py
 Deploy the flows to a Prefect work pool to automate periodic runs:
 ```bash
 # Register Ingestion Flow
-prefect deployment build -n tides-ingest -p default -q default opr4_flows/tides_controller.py:run_target_workflow
+prefect deployment build -n tides-ingest -p default -q default tides_flows/tides_controller.py:run_target_workflow
 prefect deployment apply run_target_workflow-deployment.yaml
 
 # Register Galaxy Matching Flow
@@ -499,14 +499,14 @@ Comprehensive integration tests are located in the [testing](testing/) directory
 
 To test the spatial matching, staging, and DB upsert logic without needing live Kafka network streams, the controller can be executed in `test_mode`.
 
-1. Open [tides_controller.py](opr4_flows/tides_controller.py) and ensure `test_mode=True` is enabled at the entry point:
+1. Open [tides_controller.py](tides_flows/tides_controller.py) and ensure `test_mode=True` is enabled at the entry point:
    ```python
    if __name__ == "__main__":
        run_target_workflow(connect_db=True, test_mode=True)
    ```
 2. Run the script:
    ```bash
-   python opr4_flows/tides_controller.py
+   python tides_flows/tides_controller.py
    ```
    This pulls mock transients defined in [mock_streams.py](testing/mock_streams.py) (including spatial overlaps to test the 1-arcsecond deduplication logic).
 

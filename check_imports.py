@@ -22,10 +22,10 @@ def get_imports(file_path):
 
 files = [
     "opr4-test-pipeline.py",
-    "opr4_flows/opr4_controller.py",
-    "opr4_flows/opr4_ztf.py",
-    "opr4_flows/submit_transients.py",
-    "opr4_flows/tidesCom.py"
+    "tides_flows/tides_controller.py",
+    "tides_flows/tides_ztf.py",
+    "tides_flows/submit_transients.py",
+    "tides_flows/tidesCom.py"
 ]
 
 all_imports = set()

@@ -26,7 +26,7 @@ python database_setup/databaseHardReset.py
 *(Note: It will aggressively warn you and ask you to type `RESET` to confirm).*
 
 ### 2. Enable Test Mode
-At the bottom of `opr4_flows/tides_controller.py`, ensure the controller is called with `test_mode=True`:
+At the bottom of `tides_flows/tides_controller.py`, ensure the controller is called with `test_mode=True`:
 ```python
 if __name__ == "__main__":
     run_target_workflow(connect_db=True, test_mode=True)
@@ -35,7 +35,7 @@ if __name__ == "__main__":
 ### 3. Run the Pipeline
 Run the controller exactly as you normally would:
 ```bash
-python opr4_flows/tides_controller.py
+python tides_flows/tides_controller.py
 ```
 You will see `=== RUNNING IN TEST MODE ===` in the console.
 

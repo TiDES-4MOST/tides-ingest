@@ -63,7 +63,7 @@ cd database_setup
 ### Manual Run / Development
 To test the pipeline manually, you can execute the controller directly:
 ```bash
-python opr4_flows/tides_controller.py
+python tides_flows/tides_controller.py
 ```
 *(Note: Refer to `testing/README.md` for instructions on using `test_mode` to safely simulate and debug deterministic data streams without requiring live Kafka streams.)*
 
@@ -72,7 +72,7 @@ For production, you should build a Prefect deployment to run the code as an auto
 
 1. Build the deployment:
 ```bash
-prefect deployment build -n tides-ingest -p lsstuk -q default opr4_flows/tides_controller.py:run_target_workflow
+prefect deployment build -n tides-ingest -p lsstuk -q default tides_flows/tides_controller.py:run_target_workflow
 ```
 2. Edit the generated `run_target_workflow-deployment.yaml` to configure scheduling (like a cronjob).
 3. Apply the deployment:
@@ -87,7 +87,7 @@ prefect deployment apply run_target_workflow-deployment.yaml
 To connect a new survey stream (e.g., ATLAS) to the TiDES pipeline, you don't need to rewrite the core SQL logic. Follow these steps:
 
 ### Step A: Create the Survey Plugin
-Create a new file `opr4_flows/tides_atlas.py`. Write a function (e.g., `fetch_atlas_targets()`) that connects to your stream and returns a **Pandas DataFrame** containing EXACTLY these columns:
+Create a new file `tides_flows/tides_atlas.py`. Write a function (e.g., `fetch_atlas_targets()`) that connects to your stream and returns a **Pandas DataFrame** containing EXACTLY these columns:
 
 | Column Name | Type | Description |
 |---|---|---|
@@ -111,7 +111,7 @@ ON CONFLICT (survey_id) DO NOTHING;
 ```
 
 ### Step C: Hook it into the Controller
-Finally, open `opr4_flows/tides_controller.py` and modify the `run_target_workflow` function to call your new plugin:
+Finally, open `tides_flows/tides_controller.py` and modify the `run_target_workflow` function to call your new plugin:
 
 ```python
 # 1. Import your plugin at the top
