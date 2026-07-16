@@ -493,44 +493,48 @@ def sync_pending_to_4most(cnx):
                 print(f"Exception while preparing transient {catDict.get('name')}: {e}")
                 
         if upload_list:
-            try:
-                uppedObjectJSONstring = st.create_transient(data=upload_list, printout=False)
-                
-                # Check for error returned as string
-                if isinstance(uppedObjectJSONstring, str) and not (uppedObjectJSONstring.startswith("[") or uppedObjectJSONstring.startswith("{")):
-                    print(f"Error registering transients in 4MOST: {uppedObjectJSONstring}")
-                else:
-                    if isinstance(uppedObjectJSONstring, str):
-                        uppedObjectJSON = json.loads(uppedObjectJSONstring)
+            batch_size = 50
+            for i in range(0, len(upload_list), batch_size):
+                batch = upload_list[i:i + batch_size]
+                batch_transient_by_name = {item['name']: transient_by_name[item['name']] for item in batch}
+                try:
+                    uppedObjectJSONstring = st.create_transient(data=batch, printout=False, timeout=300)
+                    
+                    # Check for error returned as string
+                    if isinstance(uppedObjectJSONstring, str) and not (uppedObjectJSONstring.startswith("[") or uppedObjectJSONstring.startswith("{")):
+                        print(f"Error registering transients in 4MOST: {uppedObjectJSONstring}")
                     else:
-                        uppedObjectJSON = uppedObjectJSONstring
-                    
-                    if not isinstance(uppedObjectJSON, list):
-                        uppedObjectJSON = [uppedObjectJSON]
-                    
-                    for uppedObject in uppedObjectJSON:
-                        name = uppedObject.get('name')
-                        if not name or name not in transient_by_name:
-                            print(f"Warning: Response contains unexpected transient name: {name}")
-                            continue
-                        catDict = transient_by_name[name]
-                        pk_4most = int(uppedObject['id'])
+                        if isinstance(uppedObjectJSONstring, str):
+                            uppedObjectJSON = json.loads(uppedObjectJSONstring)
+                        else:
+                            uppedObjectJSON = uppedObjectJSONstring
                         
-                        # Update local DB with pk_4most and set sync_pending = False
-                        update_q = sqlalchemy.text(
-                            "UPDATE tides_master SET pk_4most = :pk, sync_pending = False WHERE tides_id = :id"
-                        )
-                        cnx.execute(update_q, {'pk': pk_4most, 'id': catDict['tides_id']})
-                        cnx.commit()
-                        print(f"Successfully registered transient {catDict['name']} with 4MOST ID {pk_4most}")
+                        if not isinstance(uppedObjectJSON, list):
+                            uppedObjectJSON = [uppedObjectJSON]
                         
-                        # Append to new synced list
-                        catDict['pk_4most'] = pk_4most
-                        new_synced_list.append(catDict)
-            except Exception as e:
-                # To match expected exception behavior for downstream verification, we print individual exceptions per transient
-                for name, catDict in transient_by_name.items():
-                    print(f"Exception while registering transient {name}: {e}")
+                        for uppedObject in uppedObjectJSON:
+                            name = uppedObject.get('name')
+                            if not name or name not in batch_transient_by_name:
+                                print(f"Warning: Response contains unexpected transient name: {name}")
+                                continue
+                            catDict = batch_transient_by_name[name]
+                            pk_4most = int(uppedObject['id'])
+                            
+                            # Update local DB with pk_4most and set sync_pending = False
+                            update_q = sqlalchemy.text(
+                                "UPDATE tides_master SET pk_4most = :pk, sync_pending = False WHERE tides_id = :id"
+                            )
+                            cnx.execute(update_q, {'pk': pk_4most, 'id': catDict['tides_id']})
+                            cnx.commit()
+                            print(f"Successfully registered transient {catDict['name']} with 4MOST ID {pk_4most}")
+                            
+                            # Append to new synced list
+                            catDict['pk_4most'] = pk_4most
+                            new_synced_list.append(catDict)
+                except Exception as e:
+                    # To match expected exception behavior for downstream verification, we print individual exceptions per transient in this batch
+                    for name, catDict in batch_transient_by_name.items():
+                        print(f"Exception while registering transient {name}: {e}")
                 
     # 4. Process existing transients (updates)
     if not existing_transients.empty:
