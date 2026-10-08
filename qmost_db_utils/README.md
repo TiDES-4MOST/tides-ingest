@@ -1,5 +1,11 @@
 # 4MOST API Target Management Utilities (`qmost_db_utils`)
 
+> **Updated 2026-10-08. Write actions are currently disabled.** These scripts do not switch on `submit_transients.WRITES_ALLOWED`, so `--action deactivate|delete` raises; `--dry-run` still works. This is intentional until their defaults are made safe (USER_GUIDE.md §12.12, §15 U1). Today:
+> - `--where` defaults to `active = True`;
+> - there is no subsurvey filter, although survey 15 is shared with another programme's `source` targets;
+> - there is no confirmation step.
+
+
 This directory contains convenience command-line utilities to query, deactivate, or delete transient targets on the 4MOST API database, and optionally synchronize these changes back to the local `tides_master` database.
 
 ---

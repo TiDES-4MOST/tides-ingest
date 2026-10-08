@@ -1,5 +1,15 @@
 # User Guide for `submit_transients.py`
 
+> **Updated 2026-10-08. See [USER_GUIDE.md §8](USER_GUIDE.md#8-4most-integration).**
+> - **Writes are off by default.** `submit_transients.py` now contains a TiDES safety block. `create_transient`, `update_transient` and `delete_transient` raise unless writes are switched on:
+>   - `st.configure_from_env()` with `FOURMOST_MODE=live`, or `st.WRITES_ALLOWED = True`;
+>   - and writes to the production host additionally need `TIDES_ENV=production`.
+> - **Use the right attribute.** `configure_from_env()` also sets `st.URL_SCHEMA` from `FOURMOST_SCHEMA`. Setting `st.SCHEMA` does nothing.
+> - **Never experiment against production.** Use `testing/fake_4most.py`.
+> - **"15" below is the 4MOST *survey* id** (`uploadedfor_survey_id`). The subsurvey is the string `tides-sn`.
+> - **Survey 15 is shared** with another programme's subsurvey `source`.
+
+
 This document goes through the steps to using the `submit_transients.py` tool. This tool allows you to submit and update transient targets to the 4FS Web Interface.
 
 ## 1. Setup & Authentication

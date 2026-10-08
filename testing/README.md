@@ -1,85 +1,48 @@
-# TiDES Ingest Testing Framework
+# Testing tides-ingest
 
-This directory contains the tools necessary to safely simulate and test the ingestion pipeline deterministically, without relying on live Kafka data streams.
+These tests run the real pipeline code against a **local test database**, with mock alert streams and an in-memory fake 4MOST. Nothing here talks to the real 4MOST.
 
-## Overview
-Because live transient streams (like LSST and ZTF) rarely emit edge cases on demand, we use **Dependency Injection** via a `test_mode` parameter in the main controller. When enabled, the pipeline bypasses Kafka and reads directly from hardcoded pandas DataFrames in `mock_streams.py`.
+For the full picture (what each step of the pipeline does and why), see [../USER_GUIDE.md](../USER_GUIDE.md), especially §7 and §13.
 
-## Adding New Test Cases
-To test a new edge case (e.g., missing filter data, extreme dates, spatial proximity):
-1. Open `testing/mock_streams.py`.
-2. Add a new dictionary object to the `data` list in either `generate_mock_lsst_targets()` or `generate_mock_ztf_targets()`.
-3. Ensure you follow the strict database schema (e.g., wrapping magnitude dictionaries in `json.dumps()`).
+## Before you start
 
-**Example Spatial Cross-Match Test:**
-To test the 1-arcsecond spatial cross-match, we created an LSST object at `RA=150.0, Dec=2.0` in the mock data. Then, we created a ZTF object at `RA=150.0001, Dec=2.0001`. The SQL pipeline automatically detects they are the same physical transient and merges their JSONB magnitude data in the `tides_master` table.
-
-## Standard Testing Workflow
-
-### 1. Wipe the Database (Nuclear Reset)
-Before running a test, ensure your test database (`dopr4_tides`) is completely clean so old data doesn't artificially trigger cross-matches or unique constraint errors. 
-From the project root, run:
-```bash
-python database_setup/databaseHardReset.py
-# Or use the bash equivalent: ./database_setup/databaseHardReset.sh
-```
-*(Note: It will aggressively warn you and ask you to type `RESET` to confirm).*
-
-### 2. Enable Test Mode
-At the bottom of `tides_flows/tides_controller.py`, ensure the controller is called with `test_mode=True`:
-```python
-if __name__ == "__main__":
-    run_target_workflow(connect_db=True, test_mode=True)
-```
-
-### 3. Run the Pipeline
-Run the controller exactly as you normally would:
-```bash
-python tides_flows/tides_controller.py
-```
-You will see `=== RUNNING IN TEST MODE ===` in the console.
-
-### 4. Verify the Results
-Inspect your database using a GUI (like pgAdmin or DBeaver) or a database CLI to verify the edge cases resolved correctly:
-- **`tides_master` Table**: Ensure the correct number of unique transients were created (e.g., matching transients shouldn't create duplicate rows).
-- **`surveys` Junction Table**: Check to ensure multi-survey objects (like our ZTF/LSST spatial match) are correctly mapped. You should see two different `source_survey_id` entries linked to the single `tides_id`.
-- **JSONB Columns**: Check the `latest_mags` column to ensure records successfully `COALESCE` and merge incoming dictionary keys without overwriting other survey filter bands.
-
----
-
-## 4MOST Downtime & Fallback Testing
-
-To verify the resilience of the pipeline when the 4MOST API is down, you can run the automated integration test:
-
-```bash
-python testing/test_4most_downtime.py
-```
-
-### Manual Downtime Verification Workflow
-If you want to manually test the fallback behavior of the orchestrator, follow these steps:
-
-1. **Point 4MOST to a Bogus Host**:
-   In your python environment or test runner, mock the schema URL variable on the `submit_transients` module before running the workflow:
-   ```python
-   import submit_transients as st
-   st.URL_SCHEMA = "https://invalid-host-4most-down.mpe.mpg.de/"
+1. **A test database.**
+   - Local (`localhost`), with `test` or `mock` in its name (e.g. `tides_dev_test`), and the q3c extension.
+   - The tests **truncate** it, so never point them at anything you care about.
+   - `test_4most_downtime.py` creates the schema and migrations itself on an empty database. Otherwise load them with `database_setup/setupDB.sh` + `migrate.sh`.
+2. In `.env`:
    ```
-2. **Execute the Pipeline**:
-   Run the controller normally (or in `test_mode`). The pipeline will complete successfully without raising exceptions.
-3. **Verify Local Database State**:
-   Inspect the `tides_master` table:
-   - Transients are fully created/updated.
-   - The `sync_pending` column is `True`.
-   - The `pk_4most` column is `null`.
-4. **Restore Connection & Sync**:
-   Restore the correct `st.URL_SCHEMA` to point to the active 4MOST API, and run the sync task:
-   ```python
-   with engine.connect() as conn:
-       tides_controller.sync_pending_to_4most(conn)
-       conn.commit()
+   TIDES_TEST_DB_DATABASE=tides_dev_test
+   TIDES_ENV=development
    ```
-5. **Verify Final State**:
-   Check the `tides_master` table again:
-   - The `sync_pending` column has cleared to `False`.
-   - The `pk_4most` column is updated with the returned 4MOST IDs.
+3. Run everything **from the repository root**.
 
+> ⚠️ Do **not** use `database_setup/databaseHardReset.*` to prepare a test. It resets whatever `TIDES_DB_DATABASE` points at, which is usually your dev database (see USER_GUIDE.md §14).
+
+## The tests
+
+| File | Run | What it checks |
+|---|---|---|
+| `test_4most_downtime.py` | `python testing/test_4most_downtime.py` | Mock ingest (3 objects, all pending). Then 4MOST **down**: nothing marked synced. Then a POST whose response is lost: rows `ambiguous`. Then recovery: rows found by name and adopted, **no duplicates**. Also asserts every request went to the fake. |
+| `test_host_matching.py` | `python testing/test_host_matching.py` | Host association, catalogue dedup and the four queue scenarios. Needs **live Lasair Sherlock** and a working token/endpoint pair (USER_GUIDE.md §9). 4MOST is faked. |
+| mock pipeline | `TIDES_DB_DATABASE=tides_dev_test python -c "import sys; sys.path.insert(0,'tides_flows'); import tides_controller as t; t.run_target_workflow(test_mode=True)"` | Matching (an LSST and a ZTF alert 0.5″ apart merge into one object), events, survey clock, deactivation. `test_mode` refuses databases without `test`/`scratch`/`mock` in the name, and never writes to 4MOST. |
+
+None of these are pytest-collectable yet: they are scripts that print `PASSED` or `FAILURE` and exit non-zero on failure.
+
+## Building blocks
+
+- **`mock_streams.py`**: `generate_mock_lsst_targets()` / `generate_mock_ztf_targets()` return DataFrames in the plugin contract (USER_GUIDE.md §7.4). To add a case, add a row:
+  - **MJD** times in the **past** (the validator drops JD values and future dates);
+  - band keys like `r_lsst` / `g_ztf`;
+  - `json.dumps(...)` for the three JSON columns, with no NaN.
+
+  An object is deactivated if its survey has more than `DEACTIVATE_AFTER_DAYS` observing nights (in the mock data) after its last detection. Keep test dates close together unless that's what you are testing.
+- **`fake_4most.py`**: `fake = fake_4most.install()` routes every `submit_transients` request to an in-memory fake.
+  - `fake.fail_mode = None | 'down' | 'lose_response'`.
+  - `fake.targets` holds what was "created"; `fake.calls` holds every request.
+  - Use it for any test that involves 4MOST.
+
+## Never
+
+- Point a test at the real 4MOST. The old version of these tests created mock targets in the production queue.
+- Run tests against a remote database, or one whose name doesn't contain `test`/`mock`.

@@ -1,5 +1,14 @@
 # TiDES Host Galaxy Matching & Follow-up Queue User Guide
 
+> **Read [USER_GUIDE.md §9](USER_GUIDE.md#9-host-galaxy-flow) and [§15 (H1–H8)](USER_GUIDE.md#15-known-limitations-and-open-work) first (updated 2026-10-08).**
+> - 4MOST submission from this flow is currently **blocked** by the write guard in `submit_transients.py`.
+> - With the current `.env`, Sherlock calls return `Unauthorized`: the LSST token is sent to the ZTF endpoint.
+> - The payload breaks the 4MOST spec (cadence must be 0 for hosts; extent/mag semantics; `mag_type` whitelist).
+> - Targets are per association, not per galaxy.
+> - `FOURMOST_SCHEMA` is now read via `configure_from_env()`. The Prefect 2 `deployment build/apply` commands below are obsolete: see USER_GUIDE.md §11.2.
+> The rest of this document still describes the flow's logic correctly.
+
+
 This guide describes how to run and deploy the standalone Host Galaxy Matching and 4MOST Follow-up Queue pipeline for the TiDES project.
 
 ---
