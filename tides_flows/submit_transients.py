@@ -338,6 +338,54 @@ PASSWORD = None
 ACCESS_TOKEN = None
 pp = pprint.PrettyPrinter(indent=4, compact=True)
 
+### TiDES safety settings (added by TiDES, not part of the original 4MOST tool)
+# Writes (POST/PATCH/DELETE) are refused unless somebody has switched them on explicitly.
+# configure_from_env() switches them on only for FOURMOST_MODE=live; the CLI below switches
+# them on because a human typed --create/--update/--delete.
+# Writes to the production host are ALSO refused unless TIDES_ENV=production.
+PRODUCTION_HOST = "4most.mpe.mpg.de"
+WRITES_ALLOWED = False
+FOURMOST_SURVEY_ID = 15   # S10/TiDES. NB: survey 15 is shared with another programme (subsurvey 'source')
+
+def check_writes_allowed(url):
+    """Raise RuntimeError unless a POST/PATCH/DELETE to ``url`` is allowed right now."""
+    if not WRITES_ALLOWED:
+        raise RuntimeError("4MOST writes are switched off (FOURMOST_MODE is not 'live'); nothing was sent.")
+    if PRODUCTION_HOST in url and os.getenv("TIDES_ENV", "development").lower() != "production":
+        raise RuntimeError(f"Refusing to write to the PRODUCTION 4MOST API ({url}) because TIDES_ENV is not 'production'.")
+
+def configure_from_env(test_mode=False):
+    """
+    Read the 4MOST settings from environment variables (call load_dotenv() first).
+
+    FOURMOST_MODE   off (default) | dry_run (build + log payloads, send nothing) | live
+    FOURMOST_SCHEMA API URL; defaults to the production URL above
+    FOURMOST_SURVEY_ID  default 15
+    TIDES_ENV       must be 'production' before anything is written to the production host
+
+    A test_mode run never writes: 'live' is downgraded to 'dry_run'.
+    Returns the mode string.
+    """
+    global USERNAME, PASSWORD, ACCESS_TOKEN, URL_SCHEMA, WRITES_ALLOWED, FOURMOST_SURVEY_ID
+    USERNAME = os.getenv("FOURMOST_USERNAME")
+    PASSWORD = os.getenv("FOURMOST_PASSWORD")
+    ACCESS_TOKEN = os.getenv("FOURMOST_ACCESS_TOKEN")
+    URL_SCHEMA = os.getenv("FOURMOST_SCHEMA") or URL_SCHEMA
+    FOURMOST_SURVEY_ID = int(os.getenv("FOURMOST_SURVEY_ID", "15"))
+
+    mode = os.getenv("FOURMOST_MODE", "off").strip().lower()
+    if mode not in ("off", "dry_run", "live"):
+        raise ValueError(f"FOURMOST_MODE must be off, dry_run or live (got {mode!r})")
+    if test_mode and mode == "live":
+        print("test_mode: FOURMOST_MODE=live downgraded to dry_run (test runs never write to 4MOST).")
+        mode = "dry_run"
+
+    WRITES_ALLOWED = (mode == "live")
+    if WRITES_ALLOWED:
+        check_writes_allowed(URL_SCHEMA)   # fail at the start of the run, not half-way through
+    print(f"4MOST: mode={mode}, url={URL_SCHEMA}, survey_id={FOURMOST_SURVEY_ID}")
+    return mode
+
 ### define an example payload and provide routine for usefully renaming it
 DEFAULT_PAYLOAD = {
     "uploadedfor_survey_id": 5,
@@ -457,7 +505,7 @@ def check_request(request=None, caller="(caller N/A)", printout=False, return_mo
     elif return_mode in ("raw", ):
         return request.text
 
-    status_ok = request.status_code in (requests.codes.ok, 204)
+    status_ok = 200 <= request.status_code < 300   # was (200, 204): 201 Created went down the error path
 
     try:
         if status_ok:
@@ -720,6 +768,7 @@ def create_transient(data=None, printout=True,
         data = payload
         del payload
     # data = json.dumps(data)
+    check_writes_allowed(url)
     session = get_session(username=username, password=password, token=token)
     r = session.post(
         url,
@@ -773,6 +822,7 @@ def update_transient(pk=None,
         if no_single_quotes:
             data = data.replace("'", '"')
         data = json.loads(data)
+    check_writes_allowed(url)
     session = get_session(username=username, password=password, token=token)
     r = session.patch(
         url,
@@ -812,6 +862,7 @@ def delete_transient(pk=None, printout=True, timeout=15, return_mode="listdict")
         return
     else:
         url = "%s/%s/" % (url.rstrip("/"), pk)
+    check_writes_allowed(url)
     session = get_session(username=username, password=password, token=token)
     r = session.delete(
         url,
@@ -976,6 +1027,9 @@ if __name__ == '__main__':
         PASSWORD = args.password
     if args.token is not None:
         ACCESS_TOKEN = args.token
+    # A human typing --create/--update/--delete is an explicit decision to write.
+    # (check_writes_allowed() still refuses the production host unless TIDES_ENV=production.)
+    WRITES_ALLOWED = True
     try:
         args.timeout = int(args.timeout)
     except Exception as m:

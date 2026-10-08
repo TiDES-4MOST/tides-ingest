@@ -69,3 +69,5 @@ psql -h "$HOST" -U "$USER" -d "$NAME" -f surveyConnector.sql
 psql -h "$HOST" -U "$USER" -d "$NAME" -f pipelines.sql
 psql -h "$HOST" -U "$USER" -d "$NAME" -f pipelineSelections.sql
 psql -h "$HOST" -U "$USER" -d "$NAME" -f createHostTable.sql
+
+echo -e "\n  ${GREEN}Base schema done. Now apply the migrations:  ./migrate.sh${NC}\n"

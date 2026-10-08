@@ -1,3 +1,10 @@
 .opr4
 __pycache__/
 .git/
+# Secrets must never be baked into the image: the worker mounts .env at run time (prefect.yaml)
+.env
+.env.*
+# Local notes / large files that do not belong in the image
+implementation_plans/
+*.pdf
+.DS_Store

@@ -24,8 +24,21 @@ import submit_transients as st
 import json 
 from pandas.api import types
 from prefect.artifacts import create_markdown_artifact
-from datetime import datetime
+from datetime import datetime, timezone
 import sys
+import math
+import traceback
+import stream_utils
+import fourmost_sync
+import provenance
+
+# --- Settings (environment variables override the defaults) ---------------------------------
+MATCH_RADIUS_DEG = 0.000277778          # 1 arcsec: the ONLY place the match radius is defined
+DEACTIVATE_AFTER_DAYS = float(os.getenv('DEACTIVATE_AFTER_DAYS', '10'))   # Chris: choose 7-10
+FAINT_LIMIT_MAG = 22.5                  # deactivate when every recorded band is fainter than this
+KAFKA_MAX_MESSAGES = int(os.getenv('KAFKA_MAX_MESSAGES', '20000'))
+# pg_try_advisory_lock key, so two runs never overlap. sync_ostd.py uses the SAME number.
+TIDES_RUN_LOCK_KEY = 0x7469444553       # the bytes of "tiDES"
 
 # Global config placeholders
 # 4MOST API Credentials
@@ -104,35 +117,6 @@ def ingest_report(tableNewTransients, tableUpdatedTransients, tableDeactivatedTr
 
     return markdown_report
 
-@task
-def load_credentials():
-    """
-    Loads 4MOST API credentials from a YAML file.
-    
-    This mirrors the 'connect4MOST_API' and 'loadTiDESdbSettings' logic from tidesCom.py.
-    """
-    global USERNAME, PASSWORD, SCHEMA, ACCESS_TOKEN
-    
-    # Load credentials from .env
-    load_dotenv()
-    
-    USERNAME = os.getenv('FOURMOST_USERNAME')
-    PASSWORD = os.getenv('FOURMOST_PASSWORD')
-    SCHEMA = os.getenv('FOURMOST_SCHEMA')
-    ACCESS_TOKEN = os.getenv('FOURMOST_ACCESS_TOKEN')
-    
-    st.USERNAME = USERNAME
-    st.PASSWORD = PASSWORD
-    st.SCHEMA = SCHEMA
-    st.ACCESS_TOKEN = ACCESS_TOKEN
-
-    # Check if critical credentials are loaded
-    if not all([USERNAME, PASSWORD]):
-        print("Warning: 4MOST credentials not found in .env")
-    
-    print("Loading credentials from environment variables...")
-    return None
-
 # @task
 # def sqlalchemy_credentials_flow():
 #     dbUsername = os.getenv('TIDES_DB_USER')
@@ -168,7 +152,7 @@ def fetch_ztf_targets(engine, pipeline_name=None, pipeline_version=None, topic=N
     pipeline_name = pipeline_name or os.getenv('ZTF_PIPELINE_NAME', 'TiDES-ZTF-default')
     pipeline_version = pipeline_version or os.getenv('ZTF_PIPELINE_VERSION', 'v1.0')
     topic = topic or os.getenv('LASAIR_ZTF_TOPIC')
-    group_id = group_id or 'opr4'+str(np.random.randint(0, 1000))
+    group_id = group_id or stream_utils.group_id_from_env('LASAIR_ZTF_GROUP_ID', 'tides-ztf')
 
     print(f"Fetching targets from opr4_ztf using pipeline: {pipeline_name} ({pipeline_version})...")
 
@@ -185,8 +169,9 @@ def fetch_ztf_targets(engine, pipeline_name=None, pipeline_version=None, topic=N
         print(f"DEV MODE: Bypassing DB check for pipeline {pipeline_name}...")
         pipeline_id = -1
         
-    targets = tides_ztf.get_targets(pipeline_id=pipeline_id, topic=topic, group_id=group_id)
-    return targets
+    # Returns (targets, consumer): offsets are committed by the flow AFTER the DB commit
+    return tides_ztf.get_targets(pipeline_id=pipeline_id, topic=topic, group_id=group_id,
+                                 max_messages=KAFKA_MAX_MESSAGES)
 
 #TODO: Create LSST module
 @task(cache_policy=NO_CACHE)
@@ -197,7 +182,7 @@ def fetch_lsst_targets(engine, pipeline_name=None, pipeline_version=None, topic=
     pipeline_name = pipeline_name or os.getenv('LSST_PIPELINE_NAME', 'TiDES-LSST-default')
     pipeline_version = pipeline_version or os.getenv('LSST_PIPELINE_VERSION', 'v1.0')
     topic = topic or os.getenv('LASAIR_LSST_TOPIC', 'lasair_16TiDES_Frohmaier_et_al_2025')
-    group_id = group_id or 'delta-opr4'+str(np.random.randint(0, 1000))
+    group_id = group_id or stream_utils.group_id_from_env('LASAIR_LSST_GROUP_ID', 'tides-lsst')
 
     print(f"Fetching targets from tides_lsst using pipeline: {pipeline_name} ({pipeline_version})...")
 
@@ -214,8 +199,9 @@ def fetch_lsst_targets(engine, pipeline_name=None, pipeline_version=None, topic=
         print(f"DEV MODE: Bypassing DB check for pipeline {pipeline_name}...")
         pipeline_id = -1
         
-    targets = tides_lsst.get_targets(pipeline_id=pipeline_id, topic=topic, group_id=group_id)
-    return targets
+    # Returns (targets, consumer): offsets are committed by the flow AFTER the DB commit
+    return tides_lsst.get_targets(pipeline_id=pipeline_id, topic=topic, group_id=group_id,
+                                  max_messages=KAFKA_MAX_MESSAGES)
 
 @task(cache_policy=NO_CACHE)
 def submit_to_4most(targets):
@@ -246,44 +232,97 @@ def map_dtype(series):
         return "BOOLEAN"
     return "TEXT"
 
+def read_sql_file(name):
+    with open(f'./sql_tasks/{name}', 'r') as f:
+        return sqlalchemy.text(f.read())
+
+def current_mjd():
+    return datetime.now(timezone.utc).timestamp() / 86400.0 + 40587.0
+
+def validate_targets(targets):
+    """
+    Drop (and print) rows that would break the survey's database transaction, so one bad
+    alert cannot block a whole night. Returns a clean copy with a fresh 0..n-1 index.
+    """
+    if targets is None or len(targets) == 0:
+        return pd.DataFrame(columns=stream_utils.CONTRACT_COLUMNS)
+    df = targets[stream_utils.CONTRACT_COLUMNS].copy().reset_index(drop=True)
+    latest_ok_mjd = current_mjd() + 1.0
+
+    def is_number(x):
+        try:
+            return x is not None and math.isfinite(float(x))
+        except (TypeError, ValueError):
+            return False
+
+    def problem(row):
+        if row['object_id'] is None or pd.isna(row['object_id']):
+            return 'no object_id'
+        for col in ('ra', 'dec', 'jdmax', 'survey_id', 'pipeline_id'):
+            if not is_number(row[col]):
+                return f'{col} missing or not finite'
+        if not (0.0 <= float(row['ra']) < 360.0 and -90.0 <= float(row['dec']) <= 90.0):
+            return 'ra/dec out of range'
+        if not (40000.0 < float(row['jdmax']) <= latest_ok_mjd):   # an MJD: not a JD, not in the future
+            return f"jdmax {row['jdmax']} is not a plausible MJD"
+        for col in ('latest_filter', 'latest_mag', 'n_sources'):
+            try:
+                values = json.loads(row[col])
+            except (TypeError, ValueError):
+                return f'{col} is not JSON'
+            if not isinstance(values, dict) or not all(is_number(v) for v in values.values()):
+                return f'{col} has non-finite values'
+        return None
+
+    problems = df.apply(problem, axis=1)
+    bad = problems.notna()
+    for i in df.index[bad]:
+        print(f"Dropping alert {df.at[i, 'object_id']} (survey {df.at[i, 'survey_id']}): {problems[i]}")
+    df = df[~bad].reset_index(drop=True)
+    df['object_id'] = df['object_id'].astype(str)
+    return df
+
 @task(cache_policy=NO_CACHE)
 def createTransientStage(dataTable, cnx):
-    
-    dataTable.columns = map(str.lower, dataTable.columns)
-    cols_with_types = ", ".join([f"{name} {map_dtype(dtype)}" for name, dtype in dataTable.dtypes.items()])
-    cnx.execute(sqlalchemy.text("DROP TABLE IF EXISTS tides_stage"))
-    cnx.execute(sqlalchemy.text(f"CREATE TEMPORARY TABLE tides_stage ({cols_with_types})"))
-    dataTable.to_sql('tides_stage', con=cnx, if_exists='append', index=False)
-    ## Below is faster when millions of rows, we are not at that stage
-    # dataTable.head(0)to_sql('tides_stage', con=cnx, index=False, if_exists='replace') # head(0) uses only the header
-    # # set index=False to avoid bringing the dataframe index in as a column 
-
-    # raw_con = cnx.raw_connection() # assuming you set up cnx as above
-    # cur  = raw_con.cursor()
-    # out = StringIO()
-
-    # # write just the body of your dataframe to a csv-like file object
-    # dataTable.to_csv(out, sep='\t', header=False, index=False) 
-
-    # out.seek(0) # sets the pointer on the file object to the first line
-    # contents = out.getvalue()
-    # cur.copy_from(out, 'table_name', null="") # copies the contents of the file object into the SQL cursor and sets null values to empty strings
-    # raw_con.commit()
+    """Load one survey's validated targets into the temporary tides_stage table."""
+    cnx.execute(read_sql_file('createStage.sql'))
+    dataTable.to_sql('tides_stage', con=cnx, if_exists='append', index=True, index_label='stage_row')
+    cnx.execute(read_sql_file('indexStage.sql'))
 
 @task(cache_policy=NO_CACHE)
 def upsertToMaster(cnx):
-  query = open('./sql_tasks/upsertTiDESstage.sql', 'r')
-  dataReturned = cnx.execute(sqlalchemy.text(query.read()))
-  result = dataReturned.mappings().all()
-  
-  # Convert to pandas DataFrame
-  upsertStage = pd.DataFrame(result)
-  
-  # Populate the surveys and pipeline_selections junction tables
-  with open('./sql_tasks/insertSurveysAndPipelines.sql', 'r') as map_query:
-      cnx.execute(sqlalchemy.text(map_query.read()))
-  
-  return upsertStage
+    """
+    Merge tides_stage into tides_master. Returns (new_rows, updated_rows, new_selections).
+
+    1. Attach each staged alert to the nearest existing master within 1".
+    2. Loop: insert one new master per group of unmatched neighbours, then attach again.
+       Each pass inserts at least one row and attaches it, so the loop always finishes;
+       normally it runs once (twice only for a chain of alerts each within 1" of the next).
+    3. One UPDATE per matched master (replay-safe, see updateMatchedMasters.sql).
+    4. Junction tables from the tides_id found in 1-2 (no second spatial match).
+    """
+    radius = {'radius_deg': MATCH_RADIUS_DEG}
+    n_staged = cnx.execute(sqlalchemy.text("SELECT count(*) FROM tides_stage")).scalar()
+
+    cnx.execute(read_sql_file('matchStageToMaster.sql'), radius)
+    new_rows = []
+    for _ in range(n_staged + 1):
+        n_unmatched = cnx.execute(sqlalchemy.text("SELECT count(*) FROM tides_stage WHERE tides_id IS NULL")).scalar()
+        if n_unmatched == 0:
+            break
+        new_rows += cnx.execute(read_sql_file('insertNewMasters.sql'), radius).mappings().all()
+        cnx.execute(read_sql_file('matchStageToMaster.sql'), radius)
+    else:
+        raise RuntimeError("upsertToMaster: staged rows still unmatched after inserting; check ra/dec")
+
+    new_rows = pd.DataFrame(new_rows)
+    updated = pd.DataFrame(cnx.execute(read_sql_file('updateMatchedMasters.sql')).mappings().all())
+    if len(new_rows) and len(updated):
+        updated = updated[~updated['tides_id'].isin(new_rows['tides_id'])]   # report new rows once
+
+    cnx.execute(read_sql_file('insertSurveys.sql'))
+    selections = pd.DataFrame(cnx.execute(read_sql_file('insertPipelineSelections.sql')).mappings().all())
+    return new_rows, updated, selections
 
 # @task(cache_policy=NO_CACHE)
 # def upsertStaged2(upsertStage,cnx):
@@ -295,15 +334,49 @@ def upsertToMaster(cnx):
 
 
 @task(cache_policy=NO_CACHE)
-def deactivateUnobservedTransients(cnx):
-  query = open('./sql_tasks/deactivateUnobserved.sql')
-  dataReturned = cnx.execute(sqlalchemy.text(query.read()))
-  result = dataReturned.mappings().all()
-  
-  # Convert to pandas DataFrame
-  deactivated = pd.DataFrame(result)
-  print("Deactivated:", deactivated)
-  return deactivated
+def deactivateUnobservedTransients(engine):
+    """Deactivate stale/faint objects in their own transaction (see deactivateUnobserved.sql)."""
+    params = {'days': DEACTIVATE_AFTER_DAYS,
+              'stale_reason': f'stale_{DEACTIVATE_AFTER_DAYS:g}d',
+              'faint_mag': FAINT_LIMIT_MAG,
+              'now_mjd': current_mjd()}
+    with engine.begin() as conn:
+        deactivated = pd.DataFrame(conn.execute(read_sql_file('deactivateUnobserved.sql'), params).mappings().all())
+        provenance.log_events(conn, deactivated, 'deactivated')
+    print(f"Deactivated {len(deactivated)} transient(s).")
+    return deactivated
+
+@task(cache_policy=NO_CACHE)
+def ingest_survey_targets(engine, targets, survey_id, submitted_by=None):
+    """
+    Everything for ONE survey in ONE database transaction: stage, match/insert, update,
+    junction tables, events, and the survey heartbeat. If anything fails, all of it is rolled
+    back and the caller does not commit the Kafka offsets, so the alerts are read again next run.
+    submitted_by: set for targets a person/external source gave us (recorded in tides_events).
+    """
+    targets = validate_targets(targets)
+    new_rows = updated = pd.DataFrame()
+    with engine.begin() as conn:
+        if len(targets) > 0:
+            createTransientStage(targets, conn)
+            new_rows, updated, selections = upsertToMaster(conn)
+
+            # Provenance (P2-K): one 'alert' (or 'manual_submission') event per staged alert,
+            # 'created' per new object, 'activated' when a new detection revives an inactive one,
+            # 'selected' the first time a (survey, pipeline) selects an object.
+            conn.execute(read_sql_file('logStageAlerts.sql'),
+                         {'submitted_by': submitted_by, 'git_sha': provenance.git_sha(),
+                          'flow_run_id': provenance.flow_run_id()})
+            provenance.log_events(conn, new_rows, 'created')
+            if len(updated):
+                revived = updated[updated['new_detection'] & ~updated['old_active'].astype(bool) & updated['active']]
+                provenance.log_events(conn, revived, 'activated', reason='redetected')
+            provenance.log_events(conn, selections, 'selected')
+
+            # The survey clock: record tonight as an observing night for this survey (validated dates only).
+            conn.execute(read_sql_file('recordHeartbeat.sql'))
+    print(f"Survey {survey_id}: {len(new_rows)} new, {len(updated)} matched existing objects.")
+    return new_rows, updated
 
 @task(cache_policy=NO_CACHE)
 def prepare4MOSTUpdate(cnx):
@@ -407,278 +480,93 @@ def updateTiDESMasterwith4MOSTKey(newTable, cnx):
   # print(row.mappings().all())
   query.close()
 
-@task(cache_policy=NO_CACHE)
-def sync_pending_to_4most(cnx):
-    """
-    Finds all transients in tides_master that have sync_pending = True,
-    and syncs them to 4MOST.
-    """
-    query = sqlalchemy.text("SELECT * FROM tides_master WHERE sync_pending = True")
-    pending_df = pd.read_sql(query, con=cnx)
-    
-    if pending_df.empty:
-        print("No pending transients to sync to 4MOST.")
-        return pd.DataFrame(), pd.DataFrame(), pd.DataFrame()
-        
-    print(f"Found {len(pending_df)} pending transients to sync to 4MOST.")
-    
-    new_synced_list = []
-    updated_synced_list = []
-    deactivated_synced_list = []
-    
-    # Filter out those that are inactive and have no pk_4most, and mark them as no longer pending
-    dead_new = pending_df[pending_df['pk_4most'].isnull() & (pending_df['active'] == False)]
-    if not dead_new.empty:
-        print(f"Skipping 4MOST registration for {len(dead_new)} inactive transients with no 4MOST ID.")
-        dead_ids = [int(x) for x in dead_new['tides_id'].tolist()]
-        if len(dead_ids) == 1:
-            q = sqlalchemy.text("UPDATE tides_master SET sync_pending = False WHERE tides_id = :id")
-            cnx.execute(q, {'id': dead_ids[0]})
-        else:
-            q = sqlalchemy.text("UPDATE tides_master SET sync_pending = False WHERE tides_id IN :ids")
-            cnx.execute(q, {'ids': tuple(dead_ids)})
-        cnx.commit()
-            
-    # New active transients to register
-    new_transients = pending_df[pending_df['pk_4most'].isnull() & (pending_df['active'] == True)]
-    # Existing transients to update (active status changed)
-    existing_transients = pending_df[pending_df['pk_4most'].notnull()]
-    
-    # 3. Process new transients (creation)
-    if not new_transients.empty:
-        print(f"Attempting to register {len(new_transients)} new transients with 4MOST...")
-        upload_list = []
-        transient_by_name = {}
-        for index, row in new_transients.iterrows():
-            catDict = row.to_dict()
-            try:
-                latest_mags = catDict.get('latest_mags', {})
-                if isinstance(latest_mags, str):
-                    latest_mags = json.loads(latest_mags)
-                    
-                min_mag = 29.99
-                min_filter = "unknown"
-                if latest_mags:
-                    min_filter = min(latest_mags, key=lambda k: float(latest_mags[k]))
-                    min_mag = float(latest_mags[min_filter])
-                
-                uploadParams = {
-                    "uploadedfor_survey_id": 15,
-                    "name" : str(catDict['name']),
-                    "ra": np.float64(catDict['ra']),
-                    "dec": np.float64(catDict['dec']),
-                    "pmra": 0.0,
-                    "pmdec": 0.0,
-                    "epoch": 2000,
-                    "resolution": 1,
-                    "subsurvey": "tides-sn",
-                    "cadence": 1048576,
-                    "template": 'SN_spec_specid56_snt1_phase5_redshift0.169.fits',
-                    "ruleset": 'tides_snMay2024',
-                    "extent_flag": 0,
-                    "extent_parameter": 0,
-                    "extent_index": 0,
-                    "mag": min_mag,
-                    "mag_type": f"LSST_r_AB",
-                    "t_exp_d": 38.0,
-                    "t_exp_g": 38.0,
-                    "t_exp_b": 4300.,
-                    "t_exp_s": 4300.,
-                    "classification": "TRA",
-                    "is_active": True,
-                }
-                upload_list.append(uploadParams)
-                transient_by_name[str(catDict['name'])] = catDict
-            except Exception as e:
-                print(f"Exception while preparing transient {catDict.get('name')}: {e}")
-                
-        if upload_list:
-            batch_size = 50
-            for i in range(0, len(upload_list), batch_size):
-                batch = upload_list[i:i + batch_size]
-                batch_transient_by_name = {item['name']: transient_by_name[item['name']] for item in batch}
-                try:
-                    uppedObjectJSONstring = st.create_transient(data=batch, printout=False, timeout=300)
-                    
-                    # Check for error returned as string
-                    if isinstance(uppedObjectJSONstring, str) and not (uppedObjectJSONstring.startswith("[") or uppedObjectJSONstring.startswith("{")):
-                        print(f"Error registering transients in 4MOST: {uppedObjectJSONstring}")
-                    else:
-                        if isinstance(uppedObjectJSONstring, str):
-                            uppedObjectJSON = json.loads(uppedObjectJSONstring)
-                        else:
-                            uppedObjectJSON = uppedObjectJSONstring
-                        
-                        if not isinstance(uppedObjectJSON, list):
-                            uppedObjectJSON = [uppedObjectJSON]
-                        
-                        for uppedObject in uppedObjectJSON:
-                            name = uppedObject.get('name')
-                            if not name or name not in batch_transient_by_name:
-                                print(f"Warning: Response contains unexpected transient name: {name}")
-                                continue
-                            catDict = batch_transient_by_name[name]
-                            pk_4most = int(uppedObject['id'])
-                            
-                            # Update local DB with pk_4most and set sync_pending = False
-                            update_q = sqlalchemy.text(
-                                "UPDATE tides_master SET pk_4most = :pk, sync_pending = False WHERE tides_id = :id"
-                            )
-                            cnx.execute(update_q, {'pk': pk_4most, 'id': catDict['tides_id']})
-                            cnx.commit()
-                            print(f"Successfully registered transient {catDict['name']} with 4MOST ID {pk_4most}")
-                            
-                            # Append to new synced list
-                            catDict['pk_4most'] = pk_4most
-                            new_synced_list.append(catDict)
-                except Exception as e:
-                    # To match expected exception behavior for downstream verification, we print individual exceptions per transient in this batch
-                    for name, catDict in batch_transient_by_name.items():
-                        print(f"Exception while registering transient {name}: {e}")
-                
-    # 4. Process existing transients (updates)
-    if not existing_transients.empty:
-        print(f"Attempting to update {len(existing_transients)} existing transients with 4MOST...")
-        for index, row in existing_transients.iterrows():
-            catDict = row.to_dict()
-            try:
-                uploadParams = {
-                    "is_active": bool(catDict['active'])
-                }
-                
-                res = st.update_transient(pk=int(catDict['pk_4most']), data=uploadParams, printout=False)
-                
-                # Check for error returned as string
-                if isinstance(res, str) and not (res.startswith("[") or res.startswith("{")):
-                    print(f"Error updating transient {catDict['name']} (4MOST ID {catDict['pk_4most']}): {res}")
-                    continue
-                    
-                # Success: clear sync_pending
-                update_q = sqlalchemy.text(
-                    "UPDATE tides_master SET sync_pending = False WHERE tides_id = :id"
-                )
-                cnx.execute(update_q, {'id': catDict['tides_id']})
-                cnx.commit()
-                print(f"Successfully updated transient {catDict['name']} (4MOST ID {catDict['pk_4most']}) in 4MOST")
-                
-                if catDict['active']:
-                    updated_synced_list.append(catDict)
-                else:
-                    deactivated_synced_list.append(catDict)
-                
-            except Exception as e:
-                print(f"Exception while updating transient {catDict.get('name')} (4MOST ID {catDict.get('pk_4most')}): {e}")
+SURVEY_IDS = {'lsst': 1, 'ztf': 2}
 
-    df_new = pd.DataFrame(new_synced_list) if new_synced_list else pd.DataFrame()
-    df_updated = pd.DataFrame(updated_synced_list) if updated_synced_list else pd.DataFrame()
-    df_deactivated = pd.DataFrame(deactivated_synced_list) if deactivated_synced_list else pd.DataFrame()
-    
-    return df_new, df_updated, df_deactivated
-
-@flow(name="delta OPR4 Workflow")
-def run_target_workflow(connect_db=True, test_mode=False):
-    """
-    The main Prefect flow for the OPR4 process.
-    # The columns we need are:
-    # object_id
-    # survey_id
-    # ra
-    # dec
-    # jdmin
-    # jdmax
-    # latest_filter - this is a JSON array
-    # latest_mag - this is a JSON array
-    # n_sources - this is a JSON array
-    # pipeline_id
-    """
-    neededTargetColumns = ['object_id', 'survey_id', 'pipeline_id', 'ra', 'dec', 'jdmin', 'jdmax', 'latest_filter', 'latest_mag', 'n_sources']
-    
-    # 1. Load configuration and credentials
-    load_credentials()
-    
-    allSourceSurveys = [] #This will hold the different source survey tables to be concatenated later
-
-    # 2. Fetch targets from the different surveys
-    # Only targets that pass a selection filter should make it this far
-    engine = sqlalchmey_engine() if connect_db else None
-    
+def fetch_survey(name, engine, test_mode):
+    """Returns (targets, consumer). test_mode uses the mock streams and has no consumer."""
     if test_mode:
-        print("=== RUNNING IN TEST MODE ===")
         sys.path.append('.')
         from testing import mock_streams
-        lsst_targets = mock_streams.generate_mock_lsst_targets()
-        ztf_targets = mock_streams.generate_mock_ztf_targets()
-        allSourceSurveys.extend([lsst_targets, ztf_targets])
-    else:
-        lsst_targets = fetch_lsst_targets(engine=engine)
-        ztf_targets = fetch_ztf_targets(engine=engine)
-        
-        ## Here we add all the source surveys to the list
-        allSourceSurveys.append(lsst_targets)
-        allSourceSurveys.append(ztf_targets)
+        mocks = {'lsst': mock_streams.generate_mock_lsst_targets, 'ztf': mock_streams.generate_mock_ztf_targets}
+        return mocks[name](), None
+    fetchers = {'lsst': fetch_lsst_targets, 'ztf': fetch_ztf_targets}
+    return fetchers[name](engine=engine)
 
-    if len(allSourceSurveys) == 0:
-        print('!!! No Transients !!!')
+@flow(name="delta OPR4 Workflow", log_prints=True, timeout_seconds=3600)
+def run_target_workflow(connect_db=True, test_mode=False):
+    """
+    The main Prefect flow.
+
+      for each enabled survey (SURVEYS_ENABLED, default 'lsst'):
+          read Kafka -> one DB transaction -> commit Kafka offsets
+          (a failing survey is recorded and skipped; the others carry on)
+      deactivate stale/faint objects            (always, even on an empty night)
+      sync tides_master to 4MOST                (always, according to FOURMOST_MODE)
+      if any step failed: raise at the end, so Prefect marks the run Failed
+
+    Survey plugins return the columns in stream_utils.CONTRACT_COLUMNS.
+    """
+    load_dotenv()
+    fourmost_mode = st.configure_from_env(test_mode=test_mode)
+    surveys = [x.strip().lower() for x in os.getenv('SURVEYS_ENABLED', 'lsst').split(',') if x.strip()]
+    if test_mode:
+        surveys = ['lsst', 'ztf']     # the mock streams cover both
+
+    if not connect_db:
+        # DEV MODE: read the streams and print. Nothing is written and NO offsets are committed.
+        for name in surveys:
+            targets, consumer = fetch_survey(name, None, test_mode)
+            stream_utils.close_consumer(consumer)
+            print(f"DEV MODE: {name}: {len(targets)} targets (nothing written).")
         return None
-        
-    ## Combine all the targets into a single DataFrame
-    ## If adding LSST, do it here
-    allTargets = pd.concat([x for x in allSourceSurveys if len(x) > 0]) ## Combine all targets into a single DataFrame
 
-    if len(allTargets) == 0:
-        #print('!!! No Transients from anyone!!!')
-        return None
+    engine = sqlalchmey_engine()
+    if test_mode and not any(w in engine.url.database.lower() for w in ('test', 'scratch', 'mock')):
+        raise RuntimeError(f"test_mode needs a test database (name containing test/scratch/mock), not {engine.url.database!r}")
 
-    if engine is None:
-        print("DEV MODE: Fetched targets successfully. Skipping DB operations.")
-        return None
+    failed = []
+    newTransients = updatedTransients = deactivatedTransients = pd.DataFrame()
+    with engine.connect() as lock_conn:
+        got_lock = lock_conn.execute(sqlalchemy.text("SELECT pg_try_advisory_lock(:k)"), {'k': TIDES_RUN_LOCK_KEY}).scalar()
+        lock_conn.commit()     # the lock belongs to the session, not the transaction: keep it, end the transaction
+        if not got_lock:
+            print("Another TiDES run (ingest or sync_ostd) holds the run lock: doing nothing this time.")
+            return None
+        try:
+            # 1. Each survey on its own: Kafka -> DB transaction -> commit offsets
+            for name in surveys:
+                consumer = None
+                try:
+                    targets, consumer = fetch_survey(name, engine, test_mode)
+                    ingest_survey_targets(engine, targets, SURVEY_IDS[name])
+                    stream_utils.commit_offsets(consumer)      # only after the DB commit above
+                except Exception:
+                    failed.append(name)
+                    print(f"!!! Survey {name} FAILED; its alerts will be re-read next run.\n{traceback.format_exc()}")
+                finally:
+                    stream_utils.close_consumer(consumer)
 
-    # We must process each survey's dataframe independently (sequentially) 
-    # instead of concatenating them all into one giant batch. 
-    # If we concatenate them, ZTF and LSST objects arrive in tides_stage at the exact same time 
-    # and both get inserted into tides_master as separate rows because tides_master was empty.
-    # By processing sequentially, LSST is inserted first, and then ZTF correctly triggers the UPDATE logic.
-    
-    upserted_dataframes = []
-    changed_states = []
-    
-    # Placeholders for report dataframes
-    newTransients = pd.DataFrame()
-    updatedTransients = pd.DataFrame()
-    deactivatedTransients = pd.DataFrame()
-    
-    with engine.connect() as conn:
-        for survey_targets in allSourceSurveys:
-            if len(survey_targets) == 0:
-                continue
-                
-            createTransientStage(survey_targets, conn) ## Create a temporary table for the recent detections
-            
-            upsertedData = upsertToMaster(conn) ## Upsert Recent data into the master table
-            print(upsertedData[['tides_id', 'name']])
-            
-            id_ChangeState = upsertedData[['tides_id', 'pk_4most', 'active']]\
-                [(upsertedData['old_status'] != upsertedData['active']) & (upsertedData['pk_4most'].notnull())]
-                
-            upserted_dataframes.append(upsertedData)
-            changed_states.append(id_ChangeState)
-            
-        # Combine all upserted results for reporting
-        if len(upserted_dataframes) > 0:
-            finalUpsertedData = pd.concat(upserted_dataframes, ignore_index=True)
-            id_ChangeState = pd.concat(changed_states, ignore_index=True)
-        else:
-            finalUpsertedData = pd.DataFrame()
-            id_ChangeState = pd.DataFrame()
-                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                
-        deactivate_TiDES_IDs_All = deactivateUnobservedTransients(conn)
-        conn.commit()
-        
-        # Sync pending items to 4MOST
-        newTransients, updatedTransients, deactivatedTransients = sync_pending_to_4most(conn)
+            # 2. Deactivation always runs. A failed survey's clock did not move, so its objects are safe.
+            try:
+                deactivateUnobservedTransients(engine)
+            except Exception:
+                failed.append('deactivation')
+                print(f"!!! Deactivation FAILED\n{traceback.format_exc()}")
+
+            # 3. 4MOST sync always runs (it works from tides_master, not from this run's alerts)
+            try:
+                newTransients, updatedTransients, deactivatedTransients = fourmost_sync.sync_pending_to_4most(engine, fourmost_mode)
+            except Exception:
+                failed.append('4most_sync')
+                print(f"!!! 4MOST sync FAILED\n{traceback.format_exc()}")
+        finally:
+            lock_conn.execute(sqlalchemy.text("SELECT pg_advisory_unlock(:k)"), {'k': TIDES_RUN_LOCK_KEY})
+            lock_conn.commit()
 
     print("Generating report...")
     ingest_report(newTransients, updatedTransients, deactivatedTransients)
+    if failed:
+        raise RuntimeError(f"These steps failed (the others completed): {failed}")
 
 if __name__ == "__main__":
     run_target_workflow(connect_db=True, test_mode=False)

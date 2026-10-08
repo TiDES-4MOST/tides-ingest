@@ -62,8 +62,9 @@ def generate_mock_ztf_targets():
             'ra': 170.0000,
             'dec': 10.0000,
             'jdmin': 61005.0,
-            'jdmax': 61045.0,
-            'latest_filter': json.dumps({"r_ztf": 61045.0}),
+            # within DEACTIVATE_AFTER_DAYS of the ZTF clock (61060), so it is not deactivated as stale
+            'jdmax': 61055.0,
+            'latest_filter': json.dumps({"r_ztf": 61055.0}),
             'latest_mag': json.dumps({"r_ztf": 19.5}),
             'n_sources': json.dumps({"r_ztf": 2})
         }

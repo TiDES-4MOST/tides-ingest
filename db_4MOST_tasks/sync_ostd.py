@@ -24,29 +24,20 @@ sys.path.append(os.path.join(ROOT_DIR, 'tides_flows'))
 
 import submit_transients as st
 
+# Must be the same number as TIDES_RUN_LOCK_KEY in tides_flows/tides_controller.py
+TIDES_RUN_LOCK_KEY = 0x7469444553
+
 @task(cache_policy=NO_CACHE, log_prints=True)
 def load_4most_credentials():
     """
-    Loads 4MOST API credentials from environment variables / .env file
-    and sets them on the submit_transients module.
+    Loads the 4MOST settings via submit_transients.configure_from_env() (this sets
+    st.URL_SCHEMA; the old code set st.SCHEMA, which nothing reads). This flow only reads
+    from 4MOST, so FOURMOST_MODE does not matter here.
     """
     load_dotenv(find_dotenv())
-    
-    username = os.getenv('FOURMOST_USERNAME')
-    password = os.getenv('FOURMOST_PASSWORD')
-    schema = os.getenv('FOURMOST_SCHEMA')
-    token = os.getenv('FOURMOST_ACCESS_TOKEN')
-    
-    if not all([username, password]):
-        print("Warning: FOURMOST_USERNAME or FOURMOST_PASSWORD not set in environment.")
-        
-    st.USERNAME = username
-    st.PASSWORD = password
-    if schema:
-        st.SCHEMA = schema
-    st.ACCESS_TOKEN = token
-    
-    print("4MOST API credentials loaded.")
+    st.configure_from_env()
+    if not all([st.USERNAME, st.PASSWORD]) and not st.ACCESS_TOKEN:
+        print("Warning: no 4MOST credentials set in environment.")
 
 @task(cache_policy=NO_CACHE, log_prints=True)
 def get_db_engine():
@@ -67,14 +58,7 @@ def get_db_engine():
         
     connection_string = f"postgresql+psycopg2://{db_user}:{db_pass}@{db_host}:{db_port}/{db_name}"
     engine = sqlalchemy.create_engine(connection_string, future=True)
-    
-    # Run inline migration to ensure date_ingested column exists
-    with engine.connect() as conn, conn.begin():
-        conn.execute(sqlalchemy.text("""
-            ALTER TABLE tides_master 
-            ADD COLUMN IF NOT EXISTS date_ingested TIMESTAMP WITH TIME ZONE DEFAULT NULL;
-        """))
-        
+    # (The inline ALTER TABLE that used to be here is in the baseline schema / migrations now.)
     return engine
 
 @task(cache_policy=NO_CACHE, log_prints=True)
@@ -112,6 +96,8 @@ def fetch_newly_ingested_targets(last_timestamp):
         # Django filters on the 4MOST side may not support isnull=False on timezone-aware fields properly,
         # so we query since a default historical starting point.
         flt = "date_ingested__gt=2026-08-01" # This is some arbitrary date at the start of the survey
+    # Survey 15 is shared with another programme: only ask for TiDES transients.
+    flt += "&subsurvey=tides-sn"
         
     print(f"Fetching targets from 4MOST transients list with filter: {flt}")
     response = st.get_list(flt=flt, limit=None)
@@ -164,10 +150,9 @@ def update_local_tides_master(engine, targets):
         UPDATE tides_master
         SET ostd_targ_id = :ostd_targ_id,
             ostd_u_obj_id = :ostd_u_obj_id,
-            date_ingested = :date_ingested,
-            updated = CURRENT_TIMESTAMP
+            date_ingested = :date_ingested
         WHERE pk_4most = :pk_4most
-    """)
+    """)   # no "updated = CURRENT_TIMESTAMP": this is bookkeeping, not a detection
     
     updated_count = 0
     with engine.connect() as conn, conn.begin():
@@ -210,9 +195,20 @@ def sync_ostd_flow(force_full_sync=False):
     """
     load_4most_credentials()
     engine = get_db_engine()
-    last_timestamp = get_last_sync_timestamp(engine, force_full_sync=force_full_sync)
-    targets = fetch_newly_ingested_targets(last_timestamp)
-    updated_rows = update_local_tides_master(engine, targets)
+    with engine.connect() as lock_conn:
+        # Same run lock as the ingest flow, so the two never interleave.
+        got_lock = lock_conn.execute(sqlalchemy.text("SELECT pg_try_advisory_lock(:k)"), {'k': TIDES_RUN_LOCK_KEY}).scalar()
+        lock_conn.commit()
+        if not got_lock:
+            print("The TiDES ingest flow is running: skipping this OSTD sync.")
+            return 0
+        try:
+            last_timestamp = get_last_sync_timestamp(engine, force_full_sync=force_full_sync)
+            targets = fetch_newly_ingested_targets(last_timestamp)
+            updated_rows = update_local_tides_master(engine, targets)
+        finally:
+            lock_conn.execute(sqlalchemy.text("SELECT pg_advisory_unlock(:k)"), {'k': TIDES_RUN_LOCK_KEY})
+            lock_conn.commit()
     return updated_rows
 
 if __name__ == "__main__":

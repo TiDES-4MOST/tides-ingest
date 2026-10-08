@@ -4,7 +4,7 @@
 
 # Generic metadata about this project
 name: tides-ingest
-prefect-version: 3.6.11
+prefect-version: 3.6.10
 # ... (metadata remains the same)
 
 build:
@@ -27,6 +27,11 @@ deployments:
 - name: opr4-deploy
   version: "0.1"
   entrypoint: "tides_flows/tides_controller.py:run_target_workflow"
+  # Never two ingest runs at once (the flow also takes a Postgres advisory lock).
+  # A run that finds the slot busy is cancelled rather than queued behind it.
+  concurrency_limit:
+    limit: 1
+    collision_strategy: CANCEL_NEW
   work_pool:
     name: opr4
     job_variables:
@@ -34,6 +39,11 @@ deployments:
       # CRITICAL: This tells the Docker worker to use your local build
       # instead of trying to pull "opr4_ingest" from Docker Hub.
       image_pull_policy: "IfNotPresent" 
+      # Secrets: the .env on the worker host is mounted read-only at run time (it is NOT in
+      # the image any more, see .dockerignore). load_dotenv() finds it next to tides_flows/.
+      # Deploy with:  TIDES_ENV_FILE=/abs/path/to/.env GIT_SHA=$(git rev-parse --short=12 HEAD) prefect deploy
+      volumes:
+        - "{{ $TIDES_ENV_FILE }}:/opt/prefect/tides-ingest/.env:ro"
       env:
-        env_file: .env
         PREFECT_API_URL: "{{ $PREFECT_SECRET_API }}"
+        GIT_SHA: "{{ $GIT_SHA }}"   # recorded in tides_events / tides_4most_log (.git is not in the image)

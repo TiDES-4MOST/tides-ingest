@@ -11,12 +11,16 @@ Usage:
 
 import pandas as pd
 import json
+import math
 import os
-import lasair  # Uncomment when lasair package is available
 import numpy as np
 from prefect.artifacts import create_markdown_artifact
 from prefect import flow, task
 from datetime import datetime
+import stream_utils
+
+ZTF_KAFKA = 'kafka.lsst.ac.uk:9092'
+JD_TO_MJD = 2400000.5   # Lasair ZTF times are JD; TiDES stores MJD everywhere
 
 @task
 def ingest_report(recentUniqueObjects):
@@ -77,58 +81,30 @@ def ingest_report(recentUniqueObjects):
 
 def connect_lasair(topic, group_id):
     """
-    Establishes a connection to the Lasair API.
+    Opens a Kafka consumer on the Lasair ZTF topic (auto-commit OFF, see stream_utils.py).
+    """
+    if not all([topic, group_id]):
+        print("Warning: Lasair ZTF topic/group id not fully set in .env")
+    return stream_utils.open_consumer(ZTF_KAFKA, topic, group_id)
+
+def get_latest_batch(consumer, max_messages=20000):
+    """
+    Reads the Lasair Kafka stream until it is idle (or max_messages).
 
     Returns:
-        lasair_consumer object: The consumer object to poll for messages.
+        pd.DataFrame: one row per objectId (its most recent alert in this batch).
     """
-    token = os.getenv('LASAIR_ZTF_TOKEN')
-    
-    # Check if credentials are set
-    if not all([topic, group_id, token]):
-        print("Warning: Lasair ZTF credentials not fully set in .env")
-
-    # TODO: Initialize Lasair consumer
-    consumer = lasair.lasair_consumer('kafka.lsst.ac.uk:9092', group_id, topic)
-    
-    print(f"Connecting to Lasair topic {topic} with group {group_id}...")
-    return consumer
-
-def get_latest_batch(consumer):
-    """
-    Polls the Lasair Kafka stream for new transient events.
-
-    Args:
-        consumer: The Lasair consumer object.
-
-    Returns:
-        pd.DataFrame: A DataFrame containing the recent objects from the stream.
-    """
-    recentObjects = pd.DataFrame()
-  
-    while True:
-        msg = consumer.poll(timeout=5) #The kafka poll will wait 5 seconds to hear back. If nothing is delivered the pipeline will end and only objects 
-        if msg is None:
-            print('no more transients')
-            break
-        
-        if msg.error():
-            print(str(msg.error()))
-            break
-        jmsg = json.loads(msg.value())
-        #print('jmsg: ',jmsg)
-        mostRecentComm = pd.DataFrame(jmsg, columns=jmsg.keys(), index=[0])
-        recentObjects = pd.concat([recentObjects,mostRecentComm], ignore_index=True)
-    #print('Length Recent Objects: ', len(recentObjects))
-    if len(recentObjects)!=0:
-        recentUniqueObjects = recentObjects.sort_values("latest_jd", ascending = False).drop_duplicates(subset=["objectId"], inplace=False, keep="first")
-    else: recentUniqueObjects = recentObjects
-    #print('Recent ZTF Object: ',recentObjects)
+    records, n_skipped = stream_utils.read_messages(consumer, id_key='objectId', max_messages=max_messages)
+    recentObjects = pd.DataFrame.from_records(records)   # built once, not concatenated per message
+    if len(recentObjects) != 0:
+        recentUniqueObjects = recentObjects.sort_values("latest_jd", ascending=False).drop_duplicates(subset=["objectId"], keep="first")
+    else:
+        recentUniqueObjects = recentObjects
 
     ingest_report(recentUniqueObjects)
 
     return recentUniqueObjects
-    
+
 
 def process_transients(raw_data, pipeline_id):
     """
@@ -136,10 +112,10 @@ def process_transients(raw_data, pipeline_id):
     tides-ingest contract.
     """
     if raw_data is None or raw_data.empty:
-        return pd.DataFrame(columns=['object_id', 'survey_id', 'ra', 'dec', 'jdmin', 'jdmax', 'latest_filter', 'latest_mag'])
+        return pd.DataFrame(columns=stream_utils.CONTRACT_COLUMNS)   # typed empty frame, never None
 
     out_df = pd.DataFrame()
-    out_df['object_id'] = raw_data.get('objectId', raw_data.get('id', pd.Series(dtype='str')))
+    out_df['object_id'] = raw_data['objectId'].astype(str)
     out_df['survey_id'] = 2  # integer id for ZTF
     out_df['pipeline_id'] = pipeline_id # Setting dynamic pipeline ID from args
     out_df['ra'] = raw_data.get('ra', pd.Series(dtype='float'))
@@ -149,38 +125,40 @@ def process_transients(raw_data, pipeline_id):
     else:
         out_df['dec'] = raw_data.get('dec', pd.Series(dtype='float'))
         
-    out_df['jdmin'] = raw_data.get('first_jd', pd.Series(dtype='float'))
-    out_df['jdmax'] = raw_data.get('latest_jd', pd.Series(dtype='float'))
+    # JD -> MJD here, on the way in. Mixing JD (2.46e6) and MJD (6e4) in jdmax would break
+    # GREATEST(jdmax) and the deactivation clock for every object ZTF ever touches.
+    out_df['jdmin'] = raw_data.get('first_jd', pd.Series(dtype='float')) - JD_TO_MJD
+    out_df['jdmax'] = raw_data.get('latest_jd', pd.Series(dtype='float')) - JD_TO_MJD
 
-    # Determine filter key
-    if 'latestFilter' in raw_data.columns and 'latestMag' in raw_data.columns:
-         filter_key = raw_data['latestFilter'].astype(str) + '_ztf'
-         raw_mag = raw_data['latestMag'].astype(float)
-    elif 'gmag' in raw_data.columns and 'rmag' in raw_data.columns:
-         raw_mag = raw_data['gmag'].fillna(raw_data['rmag'])
-         filter_key = pd.Series(np.where(raw_data['gmag'].notnull(), 'g_ztf', 'r_ztf'), index=raw_data.index)
-    else:
-         filter_key = pd.Series('unknown_ztf', index=raw_data.index)
-         raw_mag = pd.Series(29.99, index=raw_data.index)
+    def is_number(x):
+        try:
+            return x is not None and math.isfinite(float(x))
+        except (TypeError, ValueError):
+            return False
 
-    # Need json string representations of dicts for postgres
-    import json
-    out_df['latest_filter'] = raw_data.apply(lambda row: json.dumps({
-        filter_key.loc[row.name]: row.get('jdmax', 0)
-    }), axis=1)
-    
-    out_df['latest_mag'] = raw_data.apply(lambda row: json.dumps({
-        filter_key.loc[row.name]: raw_mag.loc[row.name]
-    }), axis=1)
+    def band_dicts(row):
+        """
+        One band per alert (the latest detection). The DB keeps the true system: g_ztf / r_ztf.
+        If there is no usable magnitude the dicts stay empty (no NaN, no placeholder).
+        """
+        if 'latestFilter' in row and 'latestMag' in row:
+            band, mag = f"{row['latestFilter']}_ztf", row['latestMag']
+        else:
+            band, mag = ('g_ztf', row.get('gmag')) if is_number(row.get('gmag')) else ('r_ztf', row.get('rmag'))
+        mjd = float(row['latest_jd']) - JD_TO_MJD if is_number(row.get('latest_jd')) else None
+        if band in ('g_ztf', 'r_ztf') and is_number(mag) and mjd is not None:
+            return {band: round(float(mag), 4)}, {band: mjd}, {band: 1}   # n_sources=1 is a placeholder (P1)
+        return {}, {}, {}
 
-    out_df['n_sources'] = raw_data.apply(lambda row: json.dumps({
-        filter_key.loc[row.name]: 1
-    }), axis=1)
+    dicts = raw_data.apply(band_dicts, axis=1)
+    out_df['latest_mag'] = [json.dumps(d[0], allow_nan=False) for d in dicts]
+    out_df['latest_filter'] = [json.dumps(d[1], allow_nan=False) for d in dicts]
+    out_df['n_sources'] = [json.dumps(d[2], allow_nan=False) for d in dicts]
 
     print(f"Processed {len(out_df)} transients from ZTF.")
     return out_df
 
-def get_targets(pipeline_id, topic, group_id):
+def get_targets(pipeline_id, topic, group_id, max_messages=20000):
     """
     The main entry point for the controller.
     
@@ -188,19 +166,21 @@ def get_targets(pipeline_id, topic, group_id):
     ready for the controller.
 
     Returns:
-        list: A list of dict-like objects representing the targets and their properties.
+        (pd.DataFrame, consumer): see tides_lsst.get_targets (same contract).
     """
     # 1. Connect to Lasair
     consumer = connect_lasair(topic, group_id)
-    
-    # 2. Get the latest batch of data
-    latest_transients = get_latest_batch(consumer)
-    
-    # 3. Process and filter the data
-    targets = process_transients(latest_transients, pipeline_id)
+    try:
+        # 2. Get the latest batch of data
+        latest_transients = get_latest_batch(consumer, max_messages=max_messages)
 
-    
-    return targets
+        # 3. Process and filter the data
+        targets = process_transients(latest_transients, pipeline_id)
+    except Exception:
+        stream_utils.close_consumer(consumer)
+        raise
+
+    return targets, consumer
 
 if __name__ == "__main__":
     from dotenv import load_dotenv

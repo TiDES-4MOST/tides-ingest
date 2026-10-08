@@ -3,9 +3,13 @@
 test_4most_downtime.py
 
 This script verifies the resilience of the tides-ingest pipeline during 4MOST API downtime.
-It simulates a downtime event by pointing the 4MOST API to a bogus URL, confirms that the
-local database ingest succeeds and marks targets as sync_pending = True, and then restores
-the actual API endpoint to verify successful recovery and syncing.
+It NEVER talks to the real 4MOST: all 4MOST traffic goes to testing/fake_4most.py.
+
+  1. ingest the mock streams (test_mode never writes to 4MOST)  -> 3 rows pending, no 4MOST id
+  2. 4MOST down                                                 -> rows stay pending ('ambiguous')
+  3. POST is created but the response is lost (timeout)         -> rows stay pending ('ambiguous')
+  4. 4MOST healthy                                              -> rows found by name and adopted:
+                                                                   all synced, and NO duplicates
 """
 
 import sys
@@ -19,7 +23,8 @@ sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 sys.path.append(os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), 'tides_flows'))
 
 import tides_controller
-import submit_transients as st
+import fourmost_sync
+import fake_4most
 
 def run_test():
     load_dotenv()
@@ -87,7 +92,8 @@ def run_test():
                 'pipelines.sql',
                 'pipelineSelections.sql',
                 'createHostTable.sql'
-            ]
+            ] + sorted(os.path.join('migrations', f) for f in os.listdir(os.path.join(db_setup_dir, 'migrations'))
+                       if f.endswith('.sql'))
             
             for file_name in sql_files:
                 sql_file = os.path.join(db_setup_dir, file_name)
@@ -101,61 +107,65 @@ def run_test():
     print("Resetting database (truncating tides_master)...")
     with engine.connect() as conn:
         conn.execute(sqlalchemy.text("TRUNCATE tides_master RESTART IDENTITY CASCADE;"))
+        conn.execute(sqlalchemy.text("TRUNCATE survey_nights, tides_4most_log;"))
         conn.execute(sqlalchemy.text("ALTER SEQUENCE tides_seq RESTART WITH 0;"))
         conn.commit()
     print("Database cleared!")
 
-    # 2. Simulate 4MOST Downtime
-    original_schema = st.URL_SCHEMA
-    bogus_schema = "https://invalid-host-4most-down.mpe.mpg.de/"
-    st.URL_SCHEMA = bogus_schema
-    print(f"\n[STEP 1] Overriding 4MOST URL to: {bogus_schema} (Simulating Downtime)")
-    
-    print("Running pipeline in test mode...")
+    def state():
+        with engine.connect() as conn:
+            return pd.read_sql("SELECT tides_id, name, pk_4most, active, sync_pending, sync_state FROM tides_master ORDER BY tides_id", conn)
+
+    def fail(msg):
+        print(f"FAILURE: {msg}")
+        sys.exit(1)
+
+    # 2. Ingest the mock streams. test_mode never writes to 4MOST (live is downgraded to dry_run).
+    print("\n[STEP 1] Running pipeline in test mode...")
     try:
         tides_controller.run_target_workflow(connect_db=True, test_mode=True)
     except Exception as e:
-        print(f"CRITICAL FAILURE: Pipeline crashed with exception: {e}")
-        sys.exit(1)
-        
-    # 3. Verify Local DB holds pending transients
-    print("\n[STEP 2] Verifying local database state...")
-    with engine.connect() as conn:
-        df = pd.read_sql("SELECT tides_id, name, pk_4most, active, sync_pending FROM tides_master", conn)
-        print(df)
-        
-        pending_count = len(df[df['sync_pending'] == True])
-        null_pk_count = len(df[df['pk_4most'].isnull()])
-        
-        if pending_count == 3 and null_pk_count == 3:
-            print("SUCCESS: 3 transients ingested locally and marked as sync_pending = True with no 4MOST ID.")
-        else:
-            print(f"FAILURE: Expected 3 pending transients with no ID, got {pending_count} pending and {null_pk_count} null IDs.")
-            sys.exit(1)
+        fail(f"Pipeline crashed with exception: {e}")
+    df = state()
+    print(df)
+    if not (len(df) == 3 and df['sync_pending'].all() and df['pk_4most'].isnull().all()):
+        fail("expected 3 transients, all sync_pending and without a 4MOST id")
 
-    # 4. Restore 4MOST URL and Sync
-    print(f"\n[STEP 3] Restoring 4MOST URL to: {original_schema} (Simulating Recovery)")
-    st.URL_SCHEMA = original_schema
-    
-    print("Triggering sync process...")
-    with engine.connect() as conn:
-        tides_controller.sync_pending_to_4most(conn)
-        conn.commit()
+    # From here on, every 4MOST request goes to the in-memory fake (never to the real 4MOST).
+    fake = fake_4most.install()
 
-    # 5. Verify Successful Sync
-    print("\n[STEP 4] Verifying final database state...")
-    with engine.connect() as conn:
-        df2 = pd.read_sql("SELECT tides_id, name, pk_4most, active, sync_pending FROM tides_master", conn)
-        print(df2)
-        
-        pending_count_after = len(df2[df2['sync_pending'] == True])
-        null_pk_count_after = len(df2[df2['pk_4most'].isnull()])
-        
-        if pending_count_after == 0 and null_pk_count_after == 0:
-            print("\nINTEGRATION TEST PASSED: Fallback and recovery work exactly as expected!")
-        else:
-            print(f"\nFAILURE: Some transients are still pending or missing IDs (Pending: {pending_count_after}, Null IDs: {null_pk_count_after})")
-            sys.exit(1)
+    # 3. 4MOST down: nothing may be marked as synced
+    print("\n[STEP 2] 4MOST down...")
+    fake.fail_mode = 'down'
+    fourmost_sync.sync_pending_to_4most(engine, 'live')
+    df = state()
+    print(df)
+    if not (df['sync_pending'].all() and df['pk_4most'].isnull().all() and len(fake.targets) == 0):
+        fail("4MOST was down but rows were marked synced")
+
+    # 4. POST created the targets but the response was lost: still pending, but 'ambiguous'
+    print("\n[STEP 3] 4MOST creates the targets but the response is lost...")
+    fake.fail_mode = 'lose_response'
+    fourmost_sync.sync_pending_to_4most(engine, 'live')
+    df = state()
+    print(df)
+    if not (df['sync_pending'].all() and (df['sync_state'] == 'ambiguous').all() and len(fake.targets) == 3):
+        fail("expected 3 ambiguous rows and 3 targets in the fake 4MOST")
+
+    # 5. 4MOST healthy again: the ambiguous rows must be FOUND (by name), not POSTed again
+    print("\n[STEP 4] 4MOST healthy again...")
+    fake.fail_mode = None
+    fourmost_sync.sync_pending_to_4most(engine, 'live')
+    df = state()
+    print(df)
+    if df['sync_pending'].any() or df['pk_4most'].isnull().any():
+        fail("some transients are still pending or have no 4MOST id")
+    if len(fake.targets) != 3:
+        fail(f"duplicates were created in 4MOST: {len(fake.targets)} targets for 3 transients")
+    if any('fake4most.local' not in url for _, url in fake.calls):
+        fail("a request was addressed to something other than the fake 4MOST")
+
+    print("\nINTEGRATION TEST PASSED: downtime, lost responses and recovery work, with no duplicates.")
 
 if __name__ == "__main__":
     run_test()

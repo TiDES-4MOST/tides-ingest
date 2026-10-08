@@ -1,15 +1,18 @@
-prefect
-prefect-dask
-dask
-distributed
-pandas
-numpy
-PyYAML
-sqlalchemy
-psycopg2-binary
-lasair
-confluent-kafka
+# Pinned to the versions in the working opr4 conda env (Python 3.12), 2026-10-08.
+# Upgrade deliberately: change a pin, run testing/, then deploy.
+prefect==3.6.10
+prefect-dask==0.3.6
+dask==2025.12.0
+distributed==2025.12.0
+pandas==2.3.3
+numpy==2.4.1
+PyYAML==6.0.3
+SQLAlchemy==2.0.45
+psycopg2-binary==2.9.11
+lasair==0.1.2
+confluent-kafka==2.13.0
 # Note: submit_transients is a local module (not included here)
-python-dotenv
+python-dotenv==1.2.1
+requests==2.32.5
+# tabulate: optional (nicer Prefect report tables); not installed in opr4, the code falls back to CSV
 tabulate
-requests

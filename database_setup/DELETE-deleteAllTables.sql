@@ -1,5 +1,9 @@
 -- Drop tables in reverse order of dependency to be safe, 
 -- though CASCADE handles constraints.
+DROP TABLE IF EXISTS tides_events CASCADE;
+DROP TABLE IF EXISTS tides_4most_log CASCADE;
+DROP TABLE IF EXISTS survey_nights CASCADE;
+DROP TABLE IF EXISTS schema_migrations CASCADE;  -- so migrate.sh re-applies everything after setupDB.sh
 DROP TABLE IF EXISTS tides_host CASCADE;
 DROP TABLE IF EXISTS pipeline_selections CASCADE;
 DROP TABLE IF EXISTS pipelines CASCADE;

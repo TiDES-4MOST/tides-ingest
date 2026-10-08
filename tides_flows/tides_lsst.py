@@ -11,12 +11,16 @@ Usage:
 
 import pandas as pd
 import json
+import math
 import os
-import lasair  # Uncomment when lasair package is available
 import numpy as np
 from prefect.artifacts import create_markdown_artifact
 from prefect import flow, task
 from datetime import datetime
+import stream_utils
+
+LSST_KAFKA = 'lasair-lsst-kafka.lsst.ac.uk:9092'
+LSST_BANDS = ('g', 'r', 'i', 'z')   # u and y are deliberately ignored
 
 @task
 def ingest_report(recentUniqueObjects):
@@ -77,60 +81,36 @@ def ingest_report(recentUniqueObjects):
 
 def connect_lasair(topic, group_id):
     """
-    Establishes a connection to the Lasair API.
+    Opens a Kafka consumer on the Lasair LSST topic (auto-commit OFF, see stream_utils.py).
 
     Returns:
-        lasair_consumer object: The consumer object to poll for messages.
+        confluent_kafka.Consumer
     """
-    token = os.getenv('LASAIR_LSST_TOKEN')
-    
-    # Check if credentials are set
-    if not all([topic, group_id, token]):
-        print("Warning: Lasair LSST credentials not fully set in .env")
+    if not all([topic, group_id]):
+        print("Warning: Lasair LSST topic/group id not fully set in .env")
+    return stream_utils.open_consumer(LSST_KAFKA, topic, group_id)
 
-    # TODO: Initialize Lasair consumer
-    consumer = lasair.lasair_consumer('lasair-lsst-kafka.lsst.ac.uk:9092', group_id, topic)
-    
-    print(f"Connecting to Lasair topic {topic} with group {group_id}...")
-    return consumer
-
-def get_latest_batch(consumer):
+def get_latest_batch(consumer, max_messages=20000):
     """
-    Polls the Lasair Kafka stream for new transient events.
+    Reads the Lasair Kafka stream until it is idle (or max_messages).
 
     Args:
-        consumer: The Lasair consumer object.
+        consumer: the Kafka consumer from connect_lasair().
 
     Returns:
-        pd.DataFrame: A DataFrame containing the recent objects from the stream.
-
-
+        pd.DataFrame: one row per diaObjectId (its most recent alert in this batch).
     """
-    recentObjects = pd.DataFrame()
-  
-    while True:
-        msg = consumer.poll(timeout=5) #The kafka poll will wait 5 seconds to hear back. If nothing is delivered the pipeline will end and only objects 
-        if msg is None:
-            print('no more transients')
-            break
-        
-        if msg.error():
-            print(str(msg.error()))
-            break
-        jmsg = json.loads(msg.value())
-        #print('jmsg: ',jmsg)
-        mostRecentComm = pd.DataFrame(jmsg, columns=jmsg.keys(), index=[0])
-        recentObjects = pd.concat([recentObjects,mostRecentComm], ignore_index=True)
-    #print('Length Recent Objects: ', len(recentObjects))
-    if len(recentObjects)!=0:
-        recentUniqueObjects = recentObjects.sort_values("lastDiaSourceMjdTai", ascending = False).drop_duplicates(subset=["diaObjectId"], inplace=False, keep="first")
-    else: recentUniqueObjects = recentObjects
-    #print('Recent LSST Object: ',recentObjects)
+    records, n_skipped = stream_utils.read_messages(consumer, id_key='diaObjectId', max_messages=max_messages)
+    recentObjects = pd.DataFrame.from_records(records)   # built once, not concatenated per message
+    if len(recentObjects) != 0:
+        recentUniqueObjects = recentObjects.sort_values("lastDiaSourceMjdTai", ascending=False).drop_duplicates(subset=["diaObjectId"], keep="first")
+    else:
+        recentUniqueObjects = recentObjects
 
     ingest_report(recentUniqueObjects)
 
     return recentUniqueObjects
-    
+
 
 def process_transients(raw_data, pipeline_id):
     """
@@ -166,7 +146,7 @@ def process_transients(raw_data, pipeline_id):
         sherlock_classifications.classification as sherlock_classifications
     """
     if raw_data is None or raw_data.empty:
-        return None
+        return pd.DataFrame(columns=stream_utils.CONTRACT_COLUMNS)   # typed empty frame, never None
 
     # Now we need to make sure the data frame columns are reformatted to match the tides-ingest contract
     # The columns we need are:
@@ -181,7 +161,8 @@ def process_transients(raw_data, pipeline_id):
     # n_sources - this is a JSON array
 
     out_df = pd.DataFrame()
-    out_df['object_id'] = raw_data.get('diaObjectId', raw_data.get('id', pd.Series(dtype='str')))
+    # str() of an int64 column: diaObjectIds are > 2**53, so they must never pass through float
+    out_df['object_id'] = raw_data['diaObjectId'].astype('int64').astype(str)
     out_df['survey_id'] = 1  # integer id for LSST
     out_df['pipeline_id'] = pipeline_id # Setting dynamic pipeline ID from args
     out_df['ra'] = raw_data.get('ra', pd.Series(dtype='float'))
@@ -191,44 +172,42 @@ def process_transients(raw_data, pipeline_id):
     else:
         out_df['dec'] = raw_data.get('dec', pd.Series(dtype='float'))
         
-    out_df['jdmin'] = raw_data.get('firstDiaSourceMjdTai', pd.Series(dtype='float'))
-    out_df['jdmax'] = raw_data.get('lastDiaSourceMjdTai', pd.Series(dtype='float'))
+    out_df['jdmin'] = raw_data.get('firstDiaSourceMjdTai', pd.Series(dtype='float'))   # MJD (TAI)
+    out_df['jdmax'] = raw_data.get('lastDiaSourceMjdTai', pd.Series(dtype='float'))    # MJD (TAI)
 
-
-    def safe_mag(flux, offset=31.4, fallback=1e-10):
-        # Fallback if flux is None, NaN, or <= 0
+    def is_number(x):
         try:
-            val = float(flux) if (flux is not None and not pd.isna(flux) and flux > 0) else fallback
-        except (ValueError, TypeError):
-            val = fallback
-        return -2.5 * np.log10(val) + offset
+            return x is not None and math.isfinite(float(x))
+        except (TypeError, ValueError):
+            return False
 
-    out_df['n_sources'] = raw_data.apply(lambda row: json.dumps({
-        'g_lsst': int(row.get('ngSources')) if pd.notnull(row.get('ngSources')) else 0,
-        'r_lsst': int(row.get('nrSources')) if pd.notnull(row.get('nrSources')) else 0,
-        'i_lsst': int(row.get('niSources')) if pd.notnull(row.get('niSources')) else 0,
-        'z_lsst': int(row.get('nzSources')) if pd.notnull(row.get('nzSources')) else 0
-    }), axis=1)
+    def band_dicts(row):
+        """
+        Per-band dicts for one alert. A band only gets a magnitude/MJD when it has a real,
+        positive flux AND a date. (Before: missing flux became mag 56.4 and missing date 0.0,
+        which looked like data, and 56.4 is outside 4MOST's allowed MAG range.)
+        """
+        mags, mjds, counts = {}, {}, {}
+        for b in LSST_BANDS:
+            key = f'{b}_lsst'
+            n = row.get(f'n{b}Sources')
+            counts[key] = int(n) if is_number(n) else 0
+            flux, mjd = row.get(f'{b}_psfFlux'), row.get(f'{b}_latestMJD')
+            if is_number(flux) and float(flux) > 0 and is_number(mjd) and float(mjd) > 0:
+                mags[key] = round(-2.5 * math.log10(float(flux)) + 31.4, 4)   # nJy -> AB mag
+                mjds[key] = float(mjd)
+        return mags, mjds, counts
 
-    # Derive standard magnitude/filter fields
-    out_df['latest_filter'] = raw_data.apply(lambda row: json.dumps({
-        'g_lsst': float(row.get('g_latestMJD')) if pd.notnull(row.get('g_latestMJD')) else 0.0,
-        'r_lsst': float(row.get('r_latestMJD')) if pd.notnull(row.get('r_latestMJD')) else 0.0,
-        'i_lsst': float(row.get('i_latestMJD')) if pd.notnull(row.get('i_latestMJD')) else 0.0,
-        'z_lsst': float(row.get('z_latestMJD')) if pd.notnull(row.get('z_latestMJD')) else 0.0
-    }), axis=1)
-
-    out_df['latest_mag'] = raw_data.apply(lambda row: json.dumps({
-        'g_lsst': safe_mag(row.get('g_psfFlux')),
-        'r_lsst': safe_mag(row.get('r_psfFlux')),
-        'i_lsst': safe_mag(row.get('i_psfFlux')),
-        'z_lsst': safe_mag(row.get('z_psfFlux'))
-    }), axis=1)
+    dicts = raw_data.apply(band_dicts, axis=1)
+    # allow_nan=False: a NaN would make PostgreSQL reject the jsonb and roll back the whole survey
+    out_df['latest_mag'] = [json.dumps(d[0], allow_nan=False) for d in dicts]
+    out_df['latest_filter'] = [json.dumps(d[1], allow_nan=False) for d in dicts]   # band -> MJD of that mag
+    out_df['n_sources'] = [json.dumps(d[2], allow_nan=False) for d in dicts]
 
     print(f"Processed {len(out_df)} transients from LSST.")
     return out_df
 
-def get_targets(pipeline_id, topic, group_id):
+def get_targets(pipeline_id, topic, group_id, max_messages=20000):
     """
     The main entry point for the controller.
     
@@ -236,19 +215,23 @@ def get_targets(pipeline_id, topic, group_id):
     ready for the controller.
 
     Returns:
-        list: A list of dict-like objects representing the targets and their properties.
+        (pd.DataFrame, consumer): the targets, and the still-open Kafka consumer.
+        The CALLER must call stream_utils.commit_offsets(consumer) after its database commit,
+        and stream_utils.close_consumer(consumer) in all cases.
     """
     # 1. Connect to Lasair
     consumer = connect_lasair(topic, group_id)
-    
-    # 2. Get the latest batch of data
-    latest_transients = get_latest_batch(consumer)
-    
-    # 3. Process and filter the data
-    targets = process_transients(latest_transients, pipeline_id)
+    try:
+        # 2. Get the latest batch of data
+        latest_transients = get_latest_batch(consumer, max_messages=max_messages)
 
-    
-    return targets
+        # 3. Process and filter the data
+        targets = process_transients(latest_transients, pipeline_id)
+    except Exception:
+        stream_utils.close_consumer(consumer)   # nothing committed: the next run re-reads these alerts
+        raise
+
+    return targets, consumer
 
 if __name__ == "__main__":
     from dotenv import load_dotenv

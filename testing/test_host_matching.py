@@ -19,9 +19,13 @@ sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 sys.path.append(os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), 'host_tools', 'tides_host_matching'))
 
 import tides_match_gal_local
+import fake_4most
 
 def run_test():
     load_dotenv()
+    # Every 4MOST request from here on goes to an in-memory fake, never to the real 4MOST
+    # (this test used to POST COSMOS1304074 to production).
+    fake = fake_4most.install()
     
     # 1. Enforce Test Database Safety
     db_user = os.getenv('TIDES_DB_USER')
