@@ -109,7 +109,8 @@ case "$ROLE" in
     db) IS_DB=1 ;;
     both) IS_WORKER=1; IS_DB=1 ;;
     auto)
-        { [ -n "$WORKER_PIDS$SERVER_PIDS" ] || have docker || have prefect; } && IS_WORKER=1
+        # docker alone is not enough: the database VM runs Postgres in Docker
+        { [ -n "$WORKER_PIDS$SERVER_PIDS" ] || have prefect; } && IS_WORKER=1
         { [ $PG_RUNNING -eq 1 ] || have pg_lsclusters; } && IS_DB=1 ;;
     *) echo "--role must be worker, db, both or auto" >&2; exit 2 ;;
 esac
@@ -678,10 +679,10 @@ section 20_boot_services s_boot
 section 30_network_time_cloudinit s_network
 if [ $IS_WORKER -eq 1 ]; then
     section 50_prefect s_prefect
-    have docker && section 60_docker s_docker
     section 70_repo_env s_repo
     section 80_connectivity s_connectivity
 fi
+have docker && section 60_docker s_docker
 [ $IS_DB -eq 1 ] && section 90_postgres s_postgres
 section 95_logs_backups s_logs
 checks
@@ -695,6 +696,8 @@ checks
 
 rm -rf "$FLAGS" "$REDACT" "$PREFECT_RAW" "$OUT/.prefect_home"
 tar -czf "$OUT.tar.gz" -C "$(dirname "$OUT")" "$(basename "$OUT")"
+# under sudo, hand the output to the invoking user so it can be scp'd without sudo
+[ $IS_ROOT -eq 1 ] && [ -n "$SUDO_USER" ] && chown -R "$SUDO_USER:" "$OUT" "$OUT.tar.gz"
 
 echo >&2
 cat "$OUT/00_FLAGS.txt" >&2
