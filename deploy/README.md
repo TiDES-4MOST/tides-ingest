@@ -51,7 +51,10 @@ Then follow the set-up below from step 1.
    data volume at boot); `systemctl daemon-reload && systemctl restart docker`.
 3. **Code and venv.**
    - `git clone … /opt/tides/tides-ingest` (a clean clone, only ever on a pushed commit);
-   - `python3 -m venv /opt/tides/venv && /opt/tides/venv/bin/pip install prefect==3.6.11 prefect-docker==0.7.1`;
+   - `python3 -m venv /opt/tides/venv && /opt/tides/venv/bin/pip install prefect==3.6.11 prefect-docker==0.7.1 importlib-metadata==8.7.1`
+     (Prefect 3.6.11 imports `importlib_metadata` without declaring it on Python 3.12; 8.7.1 is the version in the
+     `prefecthq/prefect:3.6.11-python3.12` image). Check with `/opt/tides/venv/bin/prefect version`, then record
+     the exact set: `/opt/tides/venv/bin/pip freeze > /opt/tides/venv-requirements.lock`;
    - `mkdir /opt/tides/prefect-home`;
    - `sudo install -d -m 750 -o root -g docker /etc/tides`.
 4. **Server.**
