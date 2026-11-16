@@ -26,6 +26,7 @@ Prefect host                                                      DB host
 | `docker/daemon.json` | Docker log rotation |
 | `docker/after-data-volume.conf` | systemd drop-in: Docker starts after the data volume is mounted |
 | `fstab.example` | data volume by UUID with `nofail` |
+| `os/apt-timeout.conf` | systemd drop-in for `apt-daily` and `apt-daily-upgrade` on both VMs: a hung apt run is killed after 2 h instead of blocking security updates |
 
 ## Retiring the old set-up (once, on the current Prefect VM)
 
@@ -46,10 +47,12 @@ Then follow the set-up below from step 1.
 ## Set-up, in order (first time, or rebuilding the host)
 
 1. **Data volume.** Mount it at `/srv/tides` (`fstab.example`). Create `prefect-postgres/` and `backups/` (700).
-2. **Docker.** Compose v2 (`apt install docker-compose-v2`); copy `docker/daemon.json` to `/etc/docker/daemon.json`;
+2. **OS updates (both VMs).** Install `os/apt-timeout.conf` as `/etc/systemd/system/apt-daily.service.d/timeout.conf`
+   and as `/etc/systemd/system/apt-daily-upgrade.service.d/timeout.conf`, then `systemctl daemon-reload`.
+3. **Docker.** Compose v2 (`apt install docker-compose-v2`); copy `docker/daemon.json` to `/etc/docker/daemon.json`;
    copy `docker/after-data-volume.conf` to `/etc/systemd/system/docker.service.d/` (so Docker waits for the
    data volume at boot); `systemctl daemon-reload && systemctl restart docker`.
-3. **Code and venv.**
+4. **Code and venv.**
    - `git clone … /opt/tides/tides-ingest` (a clean clone, only ever on a pushed commit);
    - `python3 -m venv /opt/tides/venv && /opt/tides/venv/bin/pip install prefect==3.6.11 prefect-docker==0.7.1 importlib-metadata==8.7.1`
      (Prefect 3.6.11 imports `importlib_metadata` without declaring it on Python 3.12; 8.7.1 is the version in the
@@ -57,7 +60,7 @@ Then follow the set-up below from step 1.
      the exact set: `/opt/tides/venv/bin/pip freeze > /opt/tides/venv-requirements.lock`;
    - `mkdir /opt/tides/prefect-home`;
    - `sudo install -d -m 750 -o root -g docker /etc/tides`.
-4. **Server.**
+5. **Server.**
    ```bash
    cd prefect-server && cp .env.example .env && chmod 600 .env
    # fill in .env, then:
@@ -65,29 +68,29 @@ Then follow the set-up below from step 1.
    curl -fsS http://127.0.0.1:4200/api/health
    ```
    Expect `true`; an API call without auth gives 401.
-5. **Worker.**
+6. **Worker.**
    1. Copy `worker/worker.env.example` to `/etc/tides/worker.env` (640 root:docker) and set the same auth string.
    2. `set -a; . /etc/tides/worker.env; set +a; /opt/tides/venv/bin/prefect work-pool create spo_4most --type docker`.
    3. Copy both `.service` files to `/etc/systemd/system/`, then `systemctl enable --now spo_4most-flow-drain spo_4most-worker`.
-6. **Database** (as the admin, from `../database_setup/`):
+7. **Database** (as the admin, from `../database_setup/`):
    1. `CREATE DATABASE spo_4most_tides`;
    2. `setupDB.sh` (it also creates q3c);
    3. `migrate.sh`;
    4. `psql -f roles.sql`;
    5. create the logins (instructions at the top of `roles.sql`).
-7. **Flow settings.** Write `/etc/tides/spo_4most.env` (640 root:docker; template `../.env.example`): `TIDES_ENV=production`, `FOURMOST_MODE=dry_run` first, the `tides_ingest` login, and a fixed `LASAIR_LSST_GROUP_ID`.
-8. **Deploy.** `echo TIDES_ENV_FILE=/etc/tides/spo_4most.env > /etc/tides/deploy.env` (640 root:docker), then `cd /opt/tides/tides-ingest && deploy/deploy.sh`. Trigger a first run with `prefect deployment run 'tides-ingest/spo_4most-ingest'`.
-9. **Alerts.** `TIDES_ALERT_WEBHOOK_URL=… python automations/create_automations.py` (with `worker.env` loaded).
-10. **Backups.**
+8. **Flow settings.** Write `/etc/tides/spo_4most.env` (640 root:docker; template `../.env.example`): `TIDES_ENV=production`, `FOURMOST_MODE=dry_run` first, the `tides_ingest` login, and a fixed `LASAIR_LSST_GROUP_ID`.
+9. **Deploy.** `echo TIDES_ENV_FILE=/etc/tides/spo_4most.env > /etc/tides/deploy.env` (640 root:docker), then `cd /opt/tides/tides-ingest && deploy/deploy.sh`. Trigger a first run with `prefect deployment run 'tides-ingest/spo_4most-ingest'`.
+10. **Alerts.** `TIDES_ALERT_WEBHOOK_URL=… python automations/create_automations.py` (with `worker.env` loaded).
+11. **Backups.**
     1. Copy `backup/tides-db-backup.sh` to `/usr/local/sbin/`; copy the unit and timer to `/etc/systemd/system/`.
     2. Write `/etc/tides/backup.env` and `/etc/tides/backup.pgpass` (600).
     3. `systemctl enable --now tides-db-backup.timer`, then `systemctl start tides-db-backup` once.
-11. **Reboot drill.** Reboot, then check:
+12. **Reboot drill.** Reboot, then check:
     - the volume is mounted;
     - `docker compose ps` is healthy;
     - the worker is active and the pool READY;
     - the next run is Completed.
-12. **Go live.** After a night in `dry_run`, set `FOURMOST_MODE=live` in `/etc/tides/spo_4most.env`. It takes effect at the next run.
+13. **Go live.** After a night in `dry_run`, set `FOURMOST_MODE=live` in `/etc/tides/spo_4most.env`. It takes effect at the next run.
 
 ## Day to day
 
