@@ -1,0 +1,19 @@
+# Shutdown hook: stop running TiDES flow-run containers cleanly BEFORE Docker (and with it the Prefect
+# server) goes down. Each container gets SIGTERM, reports itself Crashed to the still-running Prefect
+# server, and its `finally` blocks release the database run lock. Nothing is lost: alerts not yet
+# committed are re-read from Kafka, and an interrupted 4MOST POST is marked 'ambiguous' beforehand.
+# Separate from the worker unit on purpose: restarting the worker must not kill running flows.
+[Unit]
+Description=Stop TiDES flow-run containers cleanly at shutdown
+After=docker.service
+Requires=docker.service
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/bin/true
+ExecStop=/bin/sh -c 'ids=$$(docker ps -q --filter label=io.prefect.flow-run-id); [ -z "$$ids" ] || docker stop -t 60 $$ids'
+TimeoutStopSec=120
+
+[Install]
+WantedBy=multi-user.target

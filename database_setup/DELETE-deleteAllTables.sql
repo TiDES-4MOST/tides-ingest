@@ -5,6 +5,7 @@ DROP TABLE IF EXISTS tides_4most_log CASCADE;
 DROP TABLE IF EXISTS survey_nights CASCADE;
 DROP TABLE IF EXISTS schema_migrations CASCADE;  -- so migrate.sh re-applies everything after setupDB.sh
 DROP TABLE IF EXISTS tides_host CASCADE;
+DROP TABLE IF EXISTS tides_host_catalog CASCADE;
 DROP TABLE IF EXISTS pipeline_selections CASCADE;
 DROP TABLE IF EXISTS pipelines CASCADE;
 DROP TABLE IF EXISTS surveys CASCADE;
@@ -21,7 +22,6 @@ DROP TABLE IF EXISTS tides_master CASCADE;
 -- tides_id is a BIGSERIAL, so it has an implicit sequence named tides_master_tides_id_seq
 -- We check if it exists before trying to alter it to avoid errors if the table didn't exist
 ALTER SEQUENCE IF EXISTS tides_master_tides_id_seq RESTART WITH 1;
--- tides_seq is explicitly created for the naming function
-ALTER SEQUENCE IF EXISTS tides_seq RESTART WITH 1;
--- tides_host_host_id_seq sequence reset
-ALTER SEQUENCE IF EXISTS tides_host_host_id_seq RESTART WITH 1;
+-- tides_seq is explicitly created for the naming function (MINVALUE 0: 0 is 'aaa')
+ALTER SEQUENCE IF EXISTS tides_seq RESTART WITH 0;
+-- (The host tables' BIGSERIAL sequences are dropped together with their tables.)

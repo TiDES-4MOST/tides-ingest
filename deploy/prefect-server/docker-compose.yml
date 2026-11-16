@@ -1,0 +1,70 @@
+# The Prefect server for the TiDES flows, and its own PostgreSQL database (Docker Compose v2).
+#
+#   cd deploy/prefect-server && cp .env.example .env && chmod 600 .env   # then fill it in
+#   docker compose up -d && docker compose ps
+#
+# Both containers restart by themselves after a reboot (restart: unless-stopped; docker.service is
+# enabled at boot). Data lives on the separate data volume (PREFECT_DB_DIR). The flow-run containers
+# join the network below (prefect.yaml: TIDES_DOCKER_NETWORK=prefect_net) and reach the API as
+# http://server:4200/api.
+name: tides-prefect
+
+services:
+  db:
+    image: postgres:17                 # minor updates only on a deliberate `docker compose pull`
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: prefect
+      POSTGRES_PASSWORD: ${PREFECT_DB_PASSWORD:?set PREFECT_DB_PASSWORD in .env}
+      POSTGRES_DB: prefect
+    volumes:
+      # create_host_path: false. If the data volume is not mounted, the container refuses to start
+      # instead of silently creating an EMPTY database on the root disk (what happened in May 2026).
+      - type: bind
+        source: ${PREFECT_DB_DIR:?set PREFECT_DB_DIR in .env}
+        target: /var/lib/postgresql/data
+        bind:
+          create_host_path: false
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U prefect -d prefect"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks: [prefect]                # no published port: only the server talks to it
+    logging: &logging
+      driver: local
+      options: {max-size: "20m", max-file: "5"}
+
+  server:
+    image: prefecthq/prefect:3.6.11-python3.12   # same version as requirements.txt and the Dockerfile
+    restart: unless-stopped
+    command: prefect server start
+    environment:
+      PREFECT_SERVER_DATABASE_CONNECTION_URL: postgresql+asyncpg://prefect:${PREFECT_DB_PASSWORD}@db:5432/prefect
+      PREFECT_SERVER_API_HOST: 0.0.0.0
+      # Basic auth on the API itself ("user:password"). Clients (worker, deploy, flow runs) send it via
+      # PREFECT_API_AUTH_STRING; the UI asks for it. /api/health and /api/ready stay open.
+      PREFECT_SERVER_API_AUTH_STRING: ${PREFECT_AUTH_STRING:?set PREFECT_AUTH_STRING in .env}
+      # The API URL the BROWSER uses (through the nginx proxy on the web server)
+      PREFECT_UI_API_URL: ${PREFECT_UI_API_URL:?set PREFECT_UI_API_URL in .env}
+      # The UI's own address: used for the links in alert messages ({{ flow_run|ui_url }})
+      PREFECT_UI_URL: ${PREFECT_UI_URL:?set PREFECT_UI_URL in .env}
+      PREFECT_SERVER_ANALYTICS_ENABLED: "false"
+    ports:
+      - "127.0.0.1:4200:4200"                       # the worker and deploy.sh on this host
+      - "${PREFECT_PRIVATE_IP:?set PREFECT_PRIVATE_IP in .env}:4200:4200"   # the nginx proxy (private network only)
+    depends_on:
+      db:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:4200/api/health', timeout=5)"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 60s
+    networks: [prefect]
+    logging: *logging
+
+networks:
+  prefect:
+    name: prefect_net                  # fixed name: prefect.yaml attaches the flow-run containers to it

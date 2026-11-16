@@ -3,6 +3,7 @@
 This is the single reference for running, operating and changing the TiDES ingest pipeline. It is written so that someone who has never seen the code can take it over.
 
 > **Verified against:** branch `delta_opr4` at `8e4c1d5`, plus the October 2026 review patch (Kafka offsets, 4MOST outbox, upsert rewrite, survey clock, milestone magnitudes, provenance tables). Last checked 2026-10-08.
+> **Updated 2026-10-26** for the spo_4most deployment: `.env` load order, run-lock and 4MOST-down failures, DB timeouts, migration 004, `roles.sql`, the reboot-safe Prefect set-up in `deploy/` and the new names (§11.2).
 > **If you change behaviour, update this guide in the same commit.** A guide that disagrees with the code is worse than none.
 
 **How to read it**
@@ -107,14 +108,14 @@ Why it is built the way it is:
 
 | Component | File | Runs as | Reads | Writes |
 |---|---|---|---|---|
-| **Ingest flow** | `tides_flows/tides_controller.py` → `run_target_workflow` | Prefect flow (deployment `opr4-deploy`) | Lasair Kafka; `tides_master` | all `tides_*` tables; 4MOST (POST/PATCH) |
+| **Ingest flow** | `tides_flows/tides_controller.py` → `run_target_workflow` | Prefect flow `tides-ingest` (deployment `spo_4most-ingest`, hourly) | Lasair Kafka; `tides_master` | all `tides_*` tables; 4MOST (POST/PATCH) |
 | Survey plugins | `tides_flows/tides_lsst.py`, `tides_flows/tides_ztf.py` | called by the flow | Kafka | nothing (return a DataFrame) |
 | Kafka helpers | `tides_flows/stream_utils.py` | library | Kafka | Kafka offsets (commit) |
 | 4MOST outbox | `tides_flows/fourmost_sync.py` | called by the flow | `tides_master` | 4MOST; `tides_master`; `tides_4most_log`; `tides_events` |
 | 4MOST payload rules | `tides_flows/fourmost_payload.py` | library (pure functions) | – | – |
 | 4MOST API client | `tides_flows/submit_transients.py` | library + CLI | 4MOST | 4MOST |
 | Provenance helpers | `tides_flows/provenance.py` | library | – | `tides_events`, `tides_4most_log` |
-| **OSTD sync** | `db_4MOST_tasks/sync_ostd.py` → `sync_ostd_flow` | Prefect flow (not yet deployed) | 4MOST (GET) | `tides_master.ostd_*`, `date_ingested` |
+| **OSTD sync** | `db_4MOST_tasks/sync_ostd.py` → `sync_ostd_flow` | Prefect flow `tides-ostd-sync` (deployment `spo_4most-ostd-sync`, daily) | 4MOST (GET) | `tides_master.ostd_*`, `date_ingested` |
 | **Host matching** | `host_tools/tides_host_matching/tides_match_gal_local.py` → `match_galaxies_flow` (git submodule) | Prefect flow / script | `tides_master`; Lasair Sherlock API | `tides_host*`; 4MOST (currently blocked, §9) |
 | SQL steps | `sql_tasks/*.sql` | executed by the flow | | |
 | Schema | `database_setup/*.sql`, `database_setup/migrations/*.sql` | `setupDB.sh`, `migrate.sh` | | |
@@ -164,10 +165,12 @@ Why it is built the way it is:
 | A malformed Kafka message | skipped and printed (never blocks the stream) | none needed |
 | An alert fails validation (NaN, JD instead of MJD, bad position, future date) | dropped and printed; **its offset is still committed** | it is lost; see §15 |
 | Database error during a survey | that survey's transaction rolls back; offsets not committed | automatic: re-read next run |
-| 4MOST down | rows stay pending; after 3 consecutive failures we stop calling 4MOST for this run | automatic next run. **The run is still green** (§15) |
+| 4MOST down (or credentials refused) | rows stay pending; after 3 consecutive failures we stop calling 4MOST for this run, and the run is marked **Failed** at the end | automatic next run (an alert is sent) |
 | 4MOST rejects one item | that item → `sync_state='failed'`; the rest of its batch is retried one by one | a human fixes the row (§12.3) |
 | 4MOST outcome unknown (timeout, 5xx, HTML page) | row → `sync_state='ambiguous'`; next run looks it up by name before any re-POST | automatic |
-| Two runs at once | the second exits immediately (advisory lock + Prefect concurrency limit) | none needed |
+| Two runs at once | the second exits immediately (advisory lock) | none needed |
+| The lock holder is stuck (> 90 min, e.g. a half-open connection after a crash) | the run **fails** and names the holder's pid | §16; `SELECT pg_terminate_backend(<pid>)` if it is dead |
+| Database unreachable at the start of a run (e.g. its VM is rebooting) | the run waits up to 10 min, then fails | automatic next run |
 
 ---
 
@@ -193,7 +196,10 @@ Why it is built the way it is:
 | `qmost_db_utils/` | admin CLIs to deactivate/delete 4MOST targets | rarely; currently blocked (§12.12) |
 | `selection_functions/Lasair-LSST-query-dev.sql` | **copy** of the Lasair LSST filter (the live one is on Lasair) | keep in step with Lasair (§10.2) |
 | `testing/` | mock streams, in-memory fake 4MOST, integration tests | §13 |
-| `prefect.yaml` | Prefect deployment (build, pull, deployment `opr4-deploy`) | deploying, scheduling |
+| `prefect.yaml`, `Dockerfile` | Prefect deployments `spo_4most-ingest` and `spo_4most-ostd-sync`: image (pinned base, tagged with the commit), schedules, job variables | deploying, scheduling (§11.2) |
+| `deploy/` | Prefect server compose, worker systemd units, backups, alert automations, `deploy.sh` (see `deploy/README.md`) | operating the production host |
+| `tides_flows/tides_db.py` | DB engine (timeouts, keepalives), `wait_for_db`, the run lock | rarely |
+| `database_setup/roles.sql` | least-privilege roles `tides_ingest`, `tides_readonly` | after new tables |
 | `requirements.txt` | pinned dependencies | upgrades (§12.14) |
 | `.env.example` | template for `.env` (never commit `.env`) | new setting |
 | `implementation_plans/` | personal notes (git-ignored), incl. the 2026-10 review | |
@@ -298,7 +304,7 @@ The flows call `load_dotenv()`, which reads `.env` from the repository root. Var
 | `KAFKA_MAX_MESSAGES` | controller | `20000` | | | Most alerts read per survey per run. The rest are read next run. |
 | `GIT_SHA` | `provenance.git_sha` | `git rev-parse HEAD` if available, else `unknown` | | set at deploy (§11.2) | Code version recorded on every event and 4MOST request. The image has no `.git`. |
 | `LASAIR_LSST_TOKEN`, `LASAIR_ZTF_TOKEN` | host flow only | – | | | Lasair **API** tokens for Sherlock. The Kafka stream needs no token. See §9 for the endpoint pairing problem. |
-| `TIDES_ENV_FILE`, `PREFECT_SECRET_API` | `prefect.yaml` (at deploy time) | – | | absolute path of the worker's `.env`; Prefect API URL | Used only by `prefect deploy`. |
+| `TIDES_ENV_FILE`, `TIDES_DOCKER_NETWORK`, `PREFECT_INTERNAL_API_URL` | `prefect.yaml` (at deploy time, set by `deploy/deploy.sh` from `/etc/tides/deploy.env`) | – / `prefect_net` / `http://server:4200/api` | | absolute path of the production `.env` on the worker host | Used only by `prefect deploy`. |
 
 Constants that are deliberately **not** environment variables (change them in code, then record the change, §10.2):
 - `MATCH_RADIUS_DEG = 0.000277778` (1″) and `FAINT_LIMIT_MAG = 22.5`, in `tides_controller.py`;
@@ -326,7 +332,9 @@ Code that never calls `configure_from_env()` has writes switched **off** (`WRITE
 
 ### 7.1 Entry point
 
-`tides_controller.run_target_workflow(connect_db=True, test_mode=False)` is a Prefect flow named **"delta OPR4 Workflow"**, with `log_prints=True` and `timeout_seconds=3600`.
+`tides_controller.run_target_workflow(connect_db=True, test_mode=False)` is a Prefect flow named **`tides-ingest`** (until 2026-10: "delta OPR4 Workflow"), with `log_prints=True` and `timeout_seconds=3600`.
+
+Settings are read from `.env` when the module is **imported** (`load_dotenv()` comes before the module-level settings). In the Docker deployment `.env` is a mounted file, not process environment. Before 2026-10-26 `DEACTIVATE_AFTER_DAYS` and `KAFKA_MAX_MESSAGES` were read too early and their `.env` values were ignored.
 
 | Call | Effect |
 |---|---|
@@ -336,7 +344,11 @@ Code that never calls `configure_from_env()` has writes switched **off** (`WRITE
 
 ### 7.2 Run lock
 
-The flow holds a **session-level PostgreSQL advisory lock** on key `TIDES_RUN_LOCK_KEY = 0x7469444553` for its whole duration. `sync_ostd_flow` uses the same key. A run that can't get the lock prints a message and returns quietly. The Prefect deployment also has `concurrency_limit: 1` with `CANCEL_NEW`. Together these make overlapping runs impossible. Overlapping runs used to create duplicate objects and duplicate 4MOST targets.
+The flow holds a **session-level PostgreSQL advisory lock** on key `TIDES_RUN_LOCK_KEY = 0x7469444553` for its whole duration (`tides_flows/tides_db.py`). `sync_ostd_flow` uses the same key. PostgreSQL releases the lock when the session ends, including when the process or its VM dies. A run that can't get the lock looks at the holder in `pg_stat_activity`:
+- if the holder's session is less than 90 min old, a healthy run is in progress: the new run prints a message and returns quietly (Completed);
+- if it is older, the holder is stuck (for example a half-open connection after a crash): the new run **fails**, naming the holder's pid, so that someone is alerted.
+
+This lock is the only overlap guard. There is deliberately **no** Prefect deployment `concurrency_limit`: Prefect 3.6 keeps that limit's lease in server memory, so a Prefect server restart killed the running flow, and an unclean restart could leave the slot taken so that every later run was cancelled. Overlapping runs used to create duplicate objects and duplicate 4MOST targets.
 
 ### 7.3 Reading Kafka (`stream_utils.py`)
 
@@ -354,6 +366,7 @@ The flow holds a **session-level PostgreSQL advisory lock** on key `TIDES_RUN_LO
   - A Kafka error raises, and the survey fails.
 - **Per object**, only the most recent alert in the batch is kept: by `lastDiaSourceMjdTai` for LSST, `latest_jd` for ZTF.
 - **Commit** (`commit_offsets`) happens **only after** that survey's database transaction has committed. If the run dies in between, the next run re-reads those alerts. The consumer is always closed.
+- `max.poll.interval.ms` is 1 h (librdkafka's default is 5 min). We stop polling while the batch goes into the database, and a slow run must not be dropped from the group (its commit would fail, and every run would re-read the same batch).
 
 ### 7.4 Survey plugins and the contract
 
@@ -484,9 +497,10 @@ After 3 consecutive network or server failures the client stops for this run (ci
 
 ### 7.11 Report and failure signalling
 
-- `ingest_report` publishes the Prefect Markdown artifact `tides-ingest-report`: new, updated and deactivated targets. The plugins also publish `tides-lsst-stream-report` / `tides-ztf-stream-report` with the raw batch.
+- `ingest_report` publishes the Prefect Markdown artifact `tides-ingest-report`: counts, plus the first 200 new, updated and deactivated targets. The plugins also publish `tides-lsst-stream-report` / `tides-ztf-stream-report` with the batch size and its first 50 rows. Artifacts live in the Prefect database, so they are kept small, and a failed artifact never fails a survey.
 - Any failed survey, failed deactivation or exception in the 4MOST step is collected. The flow **raises at the end**, after doing everything it could, so Prefect shows **Failed**.
-- **4MOST being down is not (yet) a failure:** the breaker stops quietly and the run is green (§15).
+- **4MOST being unreachable is a failure** (since 2026-10-26). When the breaker stops after 3 consecutive failures (including 401/403), the flow finishes everything else and then raises (`4most_unreachable`). Nothing is lost: rows stay pending.
+- A run lock held for more than 90 min is also a failure (§7.2).
 
 ### 7.12 Naming
 
@@ -570,11 +584,11 @@ Source: `https://4most.mpe.mpg.de/static/manual/Target_catalog_format_specificat
 ### 8.5 OSTD ingestion and `sync_ostd`
 
 4MOST periodically ingests targets into the OSTD. `db_4MOST_tasks/sync_ostd.py` (`sync_ostd_flow(force_full_sync=False)`):
-1. Reads `MAX(date_ingested)` from `tides_master`. On the first run it starts from `2026-08-01`.
+1. Reads `MAX(date_ingested)` from `tides_master` and goes back 3 days (`RESCAN_DAYS`), so that a target adopted late (after an `ambiguous` POST) is not skipped. The update is idempotent. On the first run it starts from `2026-08-01`.
 2. Fetches `?date_ingested__gt=…&subsurvey=tides-sn`, following pagination.
 3. Writes `ostd_targ_id`, `ostd_u_obj_id` and `date_ingested` by `pk_4most`.
 
-It only **reads** from 4MOST. It takes the same run lock as the ingest flow, and deliberately does **not** touch `updated`. It is not yet in `prefect.yaml` (§11.2).
+It only **reads** from 4MOST. It takes the same run lock as the ingest flow, and deliberately does **not** touch `updated`. It has a 30-min timeout and a page cap. It is deployed as `tides-ostd-sync/spo_4most-ostd-sync`, daily at 16:30 UTC, after OpSys's ingestion at about 15:00 German local time (§11.2).
 
 ### 8.6 Rules of the road with 4MOST
 
@@ -748,49 +762,46 @@ WHERE e.event_type = 'deactivated' ORDER BY e.event_time DESC LIMIT 20;
 | Laptop / development | your dev DB | `development` | `off` or `dry_run` | random (unset) |
 | Tests | a local DB with `test` in its name | `development` | (tests use the in-memory fake) | – |
 | Shadow (before go-live, §11.5) | production DB | `production` | `dry_run` | the fixed production group |
-| Production | production DB | `production` | `live` | fixed, e.g. `tides-lsst-prod-1` |
+| Production | production DB (`spo_4most_tides`) | `production` | `live` | fixed: `tides-lsst-spo_4most-1` |
 
 ### 11.2 Deploying with Prefect
 
-`prefect.yaml` defines the build, the pull step and one deployment:
-- **Build:** a Docker image `opr4_ingest:latest` (`dockerfile: auto` installs `requirements.txt`). The image contains **no secrets**: `.env` is in `.dockerignore`.
-- **Pull:** set the working directory to `/opt/prefect/tides-ingest` in the container.
-- **Deployment `opr4-deploy`:** entrypoint `tides_flows/tides_controller.py:run_target_workflow`, work pool `opr4`, `concurrency_limit: 1` (`CANCEL_NEW`).
-  - The worker host's `.env` is **mounted read-only** at `/opt/prefect/tides-ingest/.env`.
-  - `GIT_SHA` is injected for provenance.
+The production host (`tides-ingest`) runs everything as services that come back by themselves after a reboot. Step-by-step set-up, reboot behaviour and operations: **`deploy/README.md`**.
 
-One-time setup on the worker host (needs Docker and `pip install prefect-docker`):
+| Piece | What | Where |
+|---|---|---|
+| Prefect server + its Postgres | Docker Compose v2, `prefecthq/prefect:3.6.11-python3.12`, API auth string, data on the data volume | `deploy/prefect-server/` |
+| Worker | `prefect worker start --pool spo_4most` as the systemd service `spo_4most-worker` (waits for the API after boot, restarts forever), plus the `spo_4most-flow-drain` shutdown hook | `deploy/worker/` |
+| Flow image | `spo_4most_ingest:<git sha>`, built from `Dockerfile` (pinned base, code in `/opt/prefect/tides-ingest`). It contains **no secrets**: `.env` is in `.dockerignore`. | `Dockerfile` |
+| Deployments | `tides-ingest/spo_4most-ingest` (hourly, `0 * * * *` UTC) and `tides-ostd-sync/spo_4most-ostd-sync` (`30 16 * * *` UTC), work pool `spo_4most` (docker) | `prefect.yaml` |
+| Alerts | six Prefect automations (failed/crashed runs, no completed run, worker gone, zombie runs) → Slack/Mattermost webhook | `deploy/automations/` |
+| Backups | nightly `pg_dump` of the TiDES and Prefect databases | `deploy/backup/` |
+
+Each flow run gets:
+- the production `.env` (`/etc/tides/spo_4most.env`), **mounted read-only** at `/opt/prefect/tides-ingest/.env`;
+- `GIT_SHA` (provenance);
+- `PREFECT_RUNNER_HEARTBEAT_FREQUENCY`;
+- the internal API URL.
+
+It runs with `auto_remove` and a 3 GB memory limit.
+
+Deploy only with `deploy/deploy.sh`, from a clean checkout of a pushed commit (`/opt/tides/tides-ingest`):
 ```bash
-prefect work-pool create opr4 --type docker
-prefect worker start --pool opr4            # keep running (systemd/tmux)
+cd /opt/tides/tides-ingest && git pull && deploy/deploy.sh
 ```
+`deploy.sh` reads `/etc/tides/worker.env` and `/etc/tides/deploy.env`, refuses uncommitted code (the image tag is the commit), checks the API and the Docker network, and runs `prefect deploy --all`.
+- **Settings vs code.** Changing settings in the mounted `.env` takes effect at the next run, with **no rebuild**. Code changes need a re-deploy, which builds a new image.
+- **Roll back.** Check out the previous commit and run `deploy.sh` again.
+- **Not deployed:** the host-matching flow (§9, §15 H1–H8). When it is ready, add it to `prefect.yaml`, daily (not weekly, §15 H6).
 
-Deploy (from the repo root, on a clean checkout of the commit you want to run):
-```bash
-TIDES_ENV_FILE=/absolute/path/to/production/.env \
-GIT_SHA=$(git rev-parse --short=12 HEAD) \
-PREFECT_SECRET_API=https://<your-prefect-server>/api \
-prefect deploy --name opr4-deploy --cron "0 * * * *" --timezone UTC
-```
-- Without `--cron` the deployment has no schedule. You can also add a `schedules:` block to the deployment in `prefect.yaml`.
-- Changing settings in the mounted `.env` takes effect at the next run, with **no rebuild**. Code changes need a re-deploy, which rebuilds the image.
-
-**Other flows are not yet in `prefect.yaml`.** Suggested entries (copy the `work_pool` block from `opr4-deploy`):
-```yaml
-- name: tides-ostd-sync
-  entrypoint: "db_4MOST_tasks/sync_ostd.py:sync_ostd_flow"
-  schedules: [{cron: "30 12 * * *", timezone: "UTC"}]     # daily, after OpSys ingestion
-- name: tides-host-matching
-  entrypoint: "host_tools/tides_host_matching/tides_match_gal_local.py:match_galaxies_flow"
-  schedules: [{cron: "0 14 * * *", timezone: "UTC"}]      # daily, not weekly (see §15 H6)
-```
+Names before 2026-10-26 (OpR4): work pool `opr4`, deployment `opr4-deploy`, flow "delta OPR4 Workflow", image `opr4_ingest:latest`.
 
 ### 11.3 Recommended schedule
 
 | Flow | Cadence | Why |
 |---|---|---|
-| Ingest (`opr4-deploy`) | every 1 h (overnight is enough, but hourly all day is harmless) | keeps 4MOST current. Each run is short, and the lock prevents overlap. |
-| OSTD sync | daily | 4MOST ingests in batches. It only reads. |
+| Ingest (`spo_4most-ingest`) | every 1 h (overnight is enough, but hourly all day is harmless) | keeps 4MOST current. Each run is short, and the lock prevents overlap. |
+| OSTD sync (`spo_4most-ostd-sync`) | daily, 16:30 UTC | 4MOST ingests in batches around 15:00 German local time. It only reads. |
 | Host matching | daily | the flow only matches *active* transients, and a weekly run misses short-lived ones. |
 
 ### 11.4 Monitoring and health checks
@@ -820,18 +831,18 @@ SELECT active, count(*) FROM tides_master GROUP BY 1;
 ```
 - **Red flags:**
   - `ambiguous` rows that persist for more than a day (4MOST lookups are failing);
-  - many `retry` outcomes (4MOST down; the run stays green, see §15);
+  - many `retry` outcomes (4MOST trouble; runs fail with `4most_unreachable` once the breaker trips);
   - the survey clock not advancing during the observing season (Lasair or Kafka problem);
   - `Dropping alert` lines in the logs (plugin and Lasair columns out of step).
 
 ### 11.5 Go-live checklist
 
 1. 4MOST confirms the wipe. A GET of survey 15, subsurvey `tides-sn`, returns **0** targets.
-2. Fresh production database:
-   - `CREATE EXTENSION q3c`;
-   - `setupDB.sh`;
+2. Fresh production database (`spo_4most_tides`):
+   - `setupDB.sh` (it also creates the q3c extension);
    - `migrate.sh`;
-   - check `SELECT * FROM schema_migrations` lists 001–003.
+   - check `SELECT * FROM schema_migrations` lists 001–004;
+   - `psql … -f roles.sql`, then a login in `tides_ingest` for the flows (never the superuser; see `roles.sql`).
 3. Production `.env`:
    - `TIDES_ENV=production`;
    - a fixed `LASAIR_LSST_GROUP_ID`;
@@ -853,11 +864,12 @@ SELECT active, count(*) FROM tides_master GROUP BY 1;
 
 ### 11.6 Backups
 
+Production backups are automatic: `deploy/backup/` runs a nightly `pg_dump -Fc` of the TiDES and Prefect databases (verified, with retention, and an alert on failure). By hand:
 ```bash
-pg_dump -Fc -h $HOST -U $USER -d $DB -f tides_$(date +%F).dump        # back up
-pg_restore -h $HOST -U $USER -d <empty_db> tides_YYYY-MM-DD.dump        # restore
+pg_dump -Fc -h $HOST -U $USER -d $DB -f tides_$(date +%F).dump        # back up (pg_dump must be >= the server version)
+pg_restore -h $HOST -U $USER -d <empty_db> --no-owner tides_YYYY-MM-DD.dump   # restore, then run database_setup/roles.sql
 ```
-Back up daily during the survey. `tides_events` and `tides_4most_log` are the provenance record and cannot be rebuilt.
+`tides_events` and `tides_4most_log` are the provenance record and cannot be rebuilt. Also keep an off-site copy.
 
 ---
 
@@ -1018,7 +1030,7 @@ There are no pytest-collectable tests yet: the files are scripts.
 From the October 2026 review (the full report is in the maintainer's notes, `implementation_plans/code_review_2026-10-08*`).
 
 **Ingest**
-- **R1 (4MOST down is a green run).** The circuit breaker stops quietly. Suggested fix: in `fourmost_sync.sync_pending_to_4most`, `raise RuntimeError(...)` instead of `print(...)` when `client.is_down`. The flow then finishes and is marked Failed.
+- **R1 (4MOST down is a green run).** *Fixed 2026-10-26:* the run is marked Failed (`4most_unreachable`) when the circuit breaker trips. A busy lock held for more than 90 min also fails the run (§7.2).
 - **R2 (dropped alerts aren't queryable).** Alerts dropped by validation are only printed, and their Kafka offsets are committed. Add a `tides_dead_letter` table if you need to audit them.
 - **R3 (one native id per survey).** `surveys` keeps only the first native id per survey; all ids are in `tides_events`. Change the PK to `(tides_id, source_survey_id, transient_name)` if you need them there.
 - **R4 (no "blocked" flag).** A manually deactivated object is reactivated by its next detection.
@@ -1077,6 +1089,9 @@ From the October 2026 review (the full report is in the maintainer's notes, `imp
 | `FileNotFoundError: ./sql_tasks/…` | run from the wrong directory | run from the repo root (the deployment sets this) |
 | `psql: … password authentication failed` in `setupDB.sh`/`migrate.sh` | the scripts pass no password | use `~/.pgpass` or `PGPASSWORD`; check `TIDES_DB_*` in `../.env` |
 | Prefect fails at start-up with `alembic … Can't locate revision identified by '…'` | the local Prefect database (`~/.prefect/prefect.db`) was created by a different Prefect version than the one installed | use a fresh Prefect home for this environment (`export PREFECT_HOME=~/.prefect-tides`), or `prefect server database reset` (erases local run history) |
+| `the TiDES run lock has been held by pid … probably stuck` | a session holding the run lock for > 90 min (crashed run, half-open connection) | check `pg_stat_activity` for that pid; `SELECT pg_terminate_backend(<pid>)` if it is dead |
+| `Database not reachable yet … retrying` | the database VM is (re)booting | nothing: the run waits up to 10 min |
+| Run Failed with `4most_unreachable` | 4MOST down, or credentials refused (401/403) | `tides_4most_log`; §12.1; rotate credentials |
 | `test_mode needs a test database …` | `test_mode=True` against a DB without `test`/`scratch`/`mock` in its name | point `TIDES_DB_DATABASE` at a test DB |
 | Objects flip on/off every few days | `DEACTIVATE_AFTER_DAYS` too small for the survey cadence | increase it (§12.9) |
 | Two TiDES objects for one transient | they were > 1″ apart, or created before the 2026-10 patch | merge by hand (update survey ids/events to one `tides_id`, deactivate the other); review the 1″ radius if it recurs |
@@ -1120,6 +1135,18 @@ From the October 2026 review (the full report is in the maintainer's notes, `imp
   - the provenance tables;
   - migrations;
   - secrets kept out of the image.
+- **2026-10-26:** deployment review for the 4MOST main survey (spo_4most):
+  - `.env` load order (C1);
+  - failures made visible (lock, 4MOST down);
+  - DB timeouts and keepalives;
+  - Kafka poll interval;
+  - capped artifacts;
+  - `sync_ostd` re-scan and deployment;
+  - milestone back-off;
+  - migration 004;
+  - `roles.sql`;
+  - reboot-safe Prefect set-up (`deploy/`, pinned 3.6.11, systemd worker, no deployment concurrency limit, automations, backups);
+  - OpR4 names replaced by `spo_4most`.
 - **References:**
   - 4MOST target catalogue specification: <https://4most.mpe.mpg.de/static/manual/Target_catalog_format_specification.htm>
   - Lasair: <https://lasair-lsst.lsst.ac.uk>

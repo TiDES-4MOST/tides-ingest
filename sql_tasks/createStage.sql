@@ -1,7 +1,8 @@
 -- The per-survey staging table. Explicit column types (no guessing from pandas dtypes).
 -- ON COMMIT DROP: it disappears with the survey's transaction.
 -- tides_id is filled in by matchStageToMaster.sql: the master row each staged alert belongs to.
-DROP TABLE IF EXISTS tides_stage;
+-- pg_temp. so this can never drop a PERMANENT table called tides_stage (old OpR4 databases had one)
+DROP TABLE IF EXISTS pg_temp.tides_stage;
 CREATE TEMPORARY TABLE tides_stage (
     stage_row     BIGINT PRIMARY KEY,
     object_id     TEXT NOT NULL,

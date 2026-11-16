@@ -1,0 +1,17 @@
+# Nightly backups of the TiDES and Prefect databases (see tides-db-backup.sh).
+#   sudo cp tides-db-backup.sh /usr/local/sbin/ && sudo cp tides-db-backup.service tides-db-backup.timer /etc/systemd/system/
+#   sudo systemctl daemon-reload && sudo systemctl enable --now tides-db-backup.timer
+#   sudo systemctl start tides-db-backup   # run one now;  journalctl -u tides-db-backup
+[Unit]
+Description=Back up the TiDES and Prefect databases
+After=docker.service network-online.target
+Requires=docker.service
+Wants=network-online.target
+# Don't back up onto the root disk if the data volume is missing
+RequiresMountsFor=/srv/tides
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/sbin/tides-db-backup.sh /etc/tides/backup.env
+Nice=10
+IOSchedulingClass=idle

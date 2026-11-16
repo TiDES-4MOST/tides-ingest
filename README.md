@@ -21,10 +21,10 @@ A separate flow matches host galaxies and queues them once the transient has fad
 ## In one minute
 
 ```
-Lasair (TiDES SQL filter) ──Kafka──▶ tides_flows/tides_controller.py  (Prefect flow, hourly)
+Lasair (TiDES SQL filter) ──Kafka──▶ tides_flows/tides_controller.py  (Prefect flow tides-ingest, hourly)
     per survey: read → validate → match within 1″ / create → events → commit DB → commit Kafka offsets
     then: deactivate after N observing nights without a detection → 4MOST outbox (create / on-off / milestones)
-db_4MOST_tasks/sync_ostd.py                      copies 4MOST's OSTD ids back (read-only to 4MOST)
+db_4MOST_tasks/sync_ostd.py                      copies 4MOST's OSTD ids back (flow tides-ostd-sync, daily)
 host_tools/tides_host_matching/ (submodule)      Sherlock host galaxies → host queue (4MOST submission currently off)
 ```
 
@@ -39,6 +39,10 @@ python testing/test_4most_downtime.py    # integration test on your *test* datab
 ```
 
 See [USER_GUIDE.md §5](USER_GUIDE.md#5-quick-start) for the full steps.
+
+## Production
+
+Prefect deployments `tides-ingest/spo_4most-ingest` and `tides-ostd-sync/spo_4most-ostd-sync`, on the Docker work pool `spo_4most`, deployed with `deploy/deploy.sh`. Server, worker, backups and alerts are all in `deploy/` (see `deploy/README.md`), and the whole set-up restarts by itself after a reboot.
 
 ## Safety
 
@@ -57,3 +61,6 @@ See [USER_GUIDE.md §5](USER_GUIDE.md#5-quick-start) for the full steps.
 | [USER_GUIDE_SUBMIT_TRANSIENTS.md](USER_GUIDE_SUBMIT_TRANSIENTS.md) | the 4MOST client (`submit_transients.py`) as a Python library |
 | [USER_GUIDE_HOST_MATCHING.md](USER_GUIDE_HOST_MATCHING.md) | the host-galaxy flow (read with USER_GUIDE.md §9 and §15) |
 | [qmost_db_utils/README.md](qmost_db_utils/README.md) | admin utilities (write actions currently disabled) |
+| [deploy/README.md](deploy/README.md) | the production host: Prefect server, worker, deployments, backups, alerts, reboots |
+
+The host-galaxy submodule (`host_tools/tides_host_matching`) is a private repository. `--recurse-submodules` needs access to it, and the ingest itself does not.

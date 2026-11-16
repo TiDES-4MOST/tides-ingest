@@ -3,9 +3,10 @@
 """
 sync_ostd.py
 
-This script provides a Prefect flow to synchronize OSTD target IDs (ostd_targ_id, ostd_u_obj_id)
-and ingestion dates (date_ingested) from the 4MOST transients database (via the API)
-into the local tides_master database.
+This script provides a Prefect flow ("tides-ostd-sync", deployment 'spo_4most-ostd-sync') to
+synchronize OSTD target IDs (ostd_targ_id, ostd_u_obj_id) and ingestion dates (date_ingested) from
+the 4MOST transients database (via the API) into the local tides_master database.
+It only READS from 4MOST. Run it daily after OpSys's ingestion (ca. 15:00 German local time).
 """
 
 import os
@@ -17,15 +18,19 @@ from dotenv import load_dotenv, find_dotenv
 from prefect import flow, task
 from prefect.cache_policies import NO_CACHE
 
-# Add root and opr4_flows directories to sys.path so we can import submit_transients
+# Add the root and tides_flows directories to sys.path so we can import submit_transients, tides_db
 ROOT_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.append(ROOT_DIR)
 sys.path.append(os.path.join(ROOT_DIR, 'tides_flows'))
 
 import submit_transients as st
+import tides_db
+from tides_db import TIDES_RUN_LOCK_KEY   # noqa: F401  (the same lock as the ingest flow)
 
-# Must be the same number as TIDES_RUN_LOCK_KEY in tides_flows/tides_controller.py
-TIDES_RUN_LOCK_KEY = 0x7469444553
+# Re-read the last few days every time (the update is idempotent): a target adopted after an
+# 'ambiguous' POST can get its pk_4most after the watermark has already moved past its date_ingested.
+RESCAN_DAYS = 3
+MAX_PAGES = 1000          # safety stop for the pagination loop (a 4MOST bug must not loop forever)
 
 @task(cache_policy=NO_CACHE, log_prints=True)
 def load_4most_credentials():
@@ -46,25 +51,19 @@ def get_db_engine():
     Ensures that the date_ingested column exists in tides_master.
     """
     load_dotenv(find_dotenv())
-    
-    db_user = os.getenv('TIDES_DB_USER')
-    db_pass = os.getenv('TIDES_DB_PASS') or ''
-    db_host = os.getenv('TIDES_DB_HOST') or 'localhost'
-    db_port = os.getenv('TIDES_DB_PORT') or '5432'
-    db_name = os.getenv('TIDES_DB_DATABASE')
-    
-    if not all([db_user, db_name]):
+
+    if not all([os.getenv('TIDES_DB_USER'), os.getenv('TIDES_DB_DATABASE')]):
         raise ValueError("Missing database credentials (TIDES_DB_USER or TIDES_DB_DATABASE) in .env file.")
-        
-    connection_string = f"postgresql+psycopg2://{db_user}:{db_pass}@{db_host}:{db_port}/{db_name}"
-    engine = sqlalchemy.create_engine(connection_string, future=True)
+
+    # Same engine settings as the ingest flow (timeouts, keepalives, application_name)
+    engine = tides_db.make_engine('tides-ostd-sync')
     # (The inline ALTER TABLE that used to be here is in the baseline schema / migrations now.)
     return engine
 
 @task(cache_policy=NO_CACHE, log_prints=True)
 def get_last_sync_timestamp(engine, force_full_sync=False):
     """
-    Queries tides_master for the maximum date_ingested value.
+    Queries tides_master for the maximum date_ingested value, minus RESCAN_DAYS.
     If force_full_sync is True, returns None.
     """
     if force_full_sync:
@@ -72,7 +71,8 @@ def get_last_sync_timestamp(engine, force_full_sync=False):
         return None
         
     with engine.connect() as conn:
-        result = conn.execute(sqlalchemy.text("SELECT MAX(date_ingested) FROM tides_master;")).scalar()
+        result = conn.execute(sqlalchemy.text("SELECT MAX(date_ingested) - make_interval(days => :d) FROM tides_master;"),
+                              {'d': RESCAN_DAYS}).scalar()
         
     if result:
         print(f"Last synchronized target ingestion timestamp: {result}")
@@ -114,7 +114,11 @@ def fetch_newly_ingested_targets(last_timestamp):
             targets = results_dict.get('results', [])
             next_url = results_dict.get('next')
             
+            pages = 1
             while next_url:
+                pages += 1
+                if pages > MAX_PAGES:
+                    raise RuntimeError(f"More than {MAX_PAGES} pages from 4MOST: stopping (pagination loop?)")
                 print(f"Fetching next page: {next_url}")
                 session = st.get_session(username=st.USERNAME, password=st.PASSWORD, token=st.ACCESS_TOKEN)
                 r = session.get(next_url, timeout=15)
@@ -188,27 +192,25 @@ def update_local_tides_master(engine, targets):
     print(f"Successfully synchronized {updated_count} target(s) in tides_master.")
     return updated_count
 
-@flow(name="Sync OSTD Targets Flow")
+@flow(name="tides-ostd-sync", log_prints=True, timeout_seconds=1800)
 def sync_ostd_flow(force_full_sync=False):
     """
     Main flow to synchronize target ingestion state from 4MOST.
     """
     load_4most_credentials()
     engine = get_db_engine()
+    tides_db.wait_for_db(engine)
     with engine.connect() as lock_conn:
-        # Same run lock as the ingest flow, so the two never interleave.
-        got_lock = lock_conn.execute(sqlalchemy.text("SELECT pg_try_advisory_lock(:k)"), {'k': TIDES_RUN_LOCK_KEY}).scalar()
-        lock_conn.commit()
-        if not got_lock:
-            print("The TiDES ingest flow is running: skipping this OSTD sync.")
+        # Same run lock as the ingest flow, so the two never interleave. If an ingest run holds it,
+        # skip quietly (the next daily run catches up); if the holder looks stuck, raise.
+        if not tides_db.take_run_lock(lock_conn, 'tides-ostd-sync'):
             return 0
         try:
             last_timestamp = get_last_sync_timestamp(engine, force_full_sync=force_full_sync)
             targets = fetch_newly_ingested_targets(last_timestamp)
             updated_rows = update_local_tides_master(engine, targets)
         finally:
-            lock_conn.execute(sqlalchemy.text("SELECT pg_advisory_unlock(:k)"), {'k': TIDES_RUN_LOCK_KEY})
-            lock_conn.commit()
+            tides_db.release_run_lock(lock_conn)
     return updated_rows
 
 if __name__ == "__main__":

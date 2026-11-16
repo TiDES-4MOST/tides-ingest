@@ -1,0 +1,32 @@
+# The Prefect worker that runs the TiDES flows (work pool "spo_4most", type docker) on this host.
+# Install (paths as in deploy/README.md; edit User= if the worker should run as another account):
+#   sudo cp spo_4most-worker.service spo_4most-flow-drain.service /etc/systemd/system/
+#   sudo systemctl daemon-reload && sudo systemctl enable --now spo_4most-flow-drain spo_4most-worker
+# Logs: journalctl -u spo_4most-worker -f
+[Unit]
+Description=Prefect worker for the TiDES spo_4most work pool (Docker)
+Documentation=file:///opt/tides/tides-ingest/deploy/README.md
+After=docker.service network-online.target
+Requires=docker.service
+Wants=network-online.target
+# Never give up restarting (the worker exits by design when the API stays unreachable)
+StartLimitIntervalSec=0
+
+[Service]
+Type=simple
+User=ubuntu
+Group=docker
+# PREFECT_API_URL, PREFECT_API_AUTH_STRING, PREFECT_RUNNER_HEARTBEAT_FREQUENCY (see worker.env.example).
+# The worker passes its Prefect settings on to every flow-run container.
+EnvironmentFile=/etc/tides/worker.env
+WorkingDirectory=/opt/tides/tides-ingest
+# After a reboot the Prefect server (in Docker) may come up later than this unit: wait for it.
+ExecStartPre=/bin/sh -c 'until curl -fsS -m 5 "$${PREFECT_API_URL}/health" >/dev/null 2>&1; do echo "waiting for the Prefect API at $${PREFECT_API_URL}"; sleep 10; done'
+TimeoutStartSec=infinity
+# --limit 2: at most two flow runs at once from this worker (the run lock serialises ingest anyway)
+ExecStart=/opt/tides/venv/bin/prefect worker start --pool spo_4most --type docker --name spo_4most-%H --limit 2
+Restart=always
+RestartSec=15
+
+[Install]
+WantedBy=multi-user.target

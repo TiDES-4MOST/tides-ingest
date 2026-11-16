@@ -1,0 +1,5 @@
+# /etc/fstab line for the 1 TB data volume (see deploy/README.md, step 1).
+#  - nofail: if the volume is not attached at boot, the VM still boots (and SSH works); the Prefect
+#    database container then refuses to start (create_host_path: false) instead of starting empty.
+#  - Use the UUID (sudo blkid /dev/vdb), not /dev/vdb: device names can change between boots.
+UUID=<uuid-of-the-volume>  /srv/tides  ext4  defaults,nofail,x-systemd.device-timeout=30s  0  2

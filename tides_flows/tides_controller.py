@@ -1,12 +1,12 @@
 """
 tides_controller.py
 
-This file is the specific implementation of the "Controller" process for the 4MOST operational rehearsal.
-It uses Prefect to orchestrate the workflow and manages 4MOST credentials.
+The TiDES ingest flow ("tides-ingest"): Lasair Kafka -> TiDES database -> 4MOST.
+Deployed with Prefect as 'tides-ingest/spo_4most-ingest' (see prefect.yaml); USER_GUIDE.md §3 and §7.
 
 Usage:
-    prefect deployment run 'run-opr4-workflow/main'
-    # OR python tides_controller.py
+    prefect deployment run 'tides-ingest/spo_4most-ingest'
+    # OR, from the repository root:  python tides_flows/tides_controller.py
 """
 
 from prefect import flow, task
@@ -31,14 +31,19 @@ import traceback
 import stream_utils
 import fourmost_sync
 import provenance
+import tides_db
+from tides_db import TIDES_RUN_LOCK_KEY   # noqa: F401  (kept importable from here)
 
 # --- Settings (environment variables override the defaults) ---------------------------------
+# Read .env BEFORE the settings below. In the Docker deployment .env is only a mounted file (its
+# values are not in the process environment), so without this the defaults were always used.
+# Variables already set in the environment still win over .env.
+load_dotenv()
 MATCH_RADIUS_DEG = 0.000277778          # 1 arcsec: the ONLY place the match radius is defined
 DEACTIVATE_AFTER_DAYS = float(os.getenv('DEACTIVATE_AFTER_DAYS', '10'))   # Chris: choose 7-10
 FAINT_LIMIT_MAG = 22.5                  # deactivate when every recorded band is fainter than this
 KAFKA_MAX_MESSAGES = int(os.getenv('KAFKA_MAX_MESSAGES', '20000'))
-# pg_try_advisory_lock key, so two runs never overlap. sync_ostd.py uses the SAME number.
-TIDES_RUN_LOCK_KEY = 0x7469444553       # the bytes of "tiDES"
+REPORT_MAX_ROWS = 200                   # rows per table in the Prefect report artifact (counts are always complete)
 
 # Global config placeholders
 # 4MOST API Credentials
@@ -82,7 +87,8 @@ def ingest_report(tableNewTransients, tableUpdatedTransients, tableDeactivatedTr
         # Check if it's a DataFrame and not empty
         if isinstance(df, pd.DataFrame) and not df.empty:
             section = f"## {title}\n"
-            
+            df = df.head(REPORT_MAX_ROWS)
+
             # Select columns if provided and they exist
             if columns:
                 existing_cols = [c for c in columns if c in df.columns]
@@ -98,12 +104,18 @@ def ingest_report(tableNewTransients, tableUpdatedTransients, tableDeactivatedTr
         
         return ""
 
+    def count(data):
+        return len(data) if isinstance(data, (list, pd.DataFrame)) else 0
+
+    # The artifact is stored in the Prefect database every run: keep it small (the first rows + counts).
+    markdown_report += (f"New: {count(tableNewTransients)}, updated: {count(tableUpdatedTransients)}, "
+                        f"deactivated: {count(tableDeactivatedTransients)} (at most {REPORT_MAX_ROWS} rows shown per table)\n\n")
     markdown_report += generate_section("New Transients", tableNewTransients, ['tides_id','pk_4most','name','ra','dec'])
     markdown_report += generate_section("Updated Transients", tableUpdatedTransients)
     markdown_report += generate_section("Deactivated Transients", tableDeactivatedTransients)
 
-    # If report is empty (besides header), mention it
-    if len(markdown_report.split('\n')) <= 4:
+    # If report is empty (besides header and counts), mention it
+    if len(markdown_report.split('\n')) <= 6:
          markdown_report += "_No changes to report._"
 
     # Create the artifact
@@ -135,14 +147,8 @@ def ingest_report(tableNewTransients, tableUpdatedTransients, tableDeactivatedTr
 
 @task(cache_policy=NO_CACHE)
 def sqlalchmey_engine():
-    dbUsername = os.getenv('TIDES_DB_USER')
-    dbPassword = os.getenv('TIDES_DB_PASS')
-    dbDatabase = os.getenv('TIDES_DB_DATABASE')
-    dbHost = os.getenv('TIDES_DB_HOST')
-    dbPort = os.getenv('TIDES_DB_PORT')
-    url = 'postgresql+psycopg2://'+str(dbUsername)+':'+str(dbPassword)+'@'+str(dbHost)+':'+str(dbPort)+'/'+str(dbDatabase)
-    engine = sqlalchemy.create_engine(url,future=True)
-    return engine
+    """Engine for the TiDES database (TIDES_DB_*), with timeouts and keepalives (see tides_db.py)."""
+    return tides_db.make_engine('tides-ingest')
 
 @task(cache_policy=NO_CACHE)
 def fetch_ztf_targets(engine, pipeline_name=None, pipeline_version=None, topic=None, group_id=None):
@@ -492,7 +498,7 @@ def fetch_survey(name, engine, test_mode):
     fetchers = {'lsst': fetch_lsst_targets, 'ztf': fetch_ztf_targets}
     return fetchers[name](engine=engine)
 
-@flow(name="delta OPR4 Workflow", log_prints=True, timeout_seconds=3600)
+@flow(name="tides-ingest", log_prints=True, timeout_seconds=3600)
 def run_target_workflow(connect_db=True, test_mode=False):
     """
     The main Prefect flow.
@@ -502,7 +508,8 @@ def run_target_workflow(connect_db=True, test_mode=False):
           (a failing survey is recorded and skipped; the others carry on)
       deactivate stale/faint objects            (always, even on an empty night)
       sync tides_master to 4MOST                (always, according to FOURMOST_MODE)
-      if any step failed: raise at the end, so Prefect marks the run Failed
+      if any step failed, or 4MOST could not be reached: raise at the end, so Prefect marks the
+      run Failed (and the alert automation fires)
 
     Survey plugins return the columns in stream_utils.CONTRACT_COLUMNS.
     """
@@ -523,14 +530,13 @@ def run_target_workflow(connect_db=True, test_mode=False):
     engine = sqlalchmey_engine()
     if test_mode and not any(w in engine.url.database.lower() for w in ('test', 'scratch', 'mock')):
         raise RuntimeError(f"test_mode needs a test database (name containing test/scratch/mock), not {engine.url.database!r}")
+    tides_db.wait_for_db(engine)     # e.g. the database VM is still booting after a maintenance reboot
 
     failed = []
     newTransients = updatedTransients = deactivatedTransients = pd.DataFrame()
     with engine.connect() as lock_conn:
-        got_lock = lock_conn.execute(sqlalchemy.text("SELECT pg_try_advisory_lock(:k)"), {'k': TIDES_RUN_LOCK_KEY}).scalar()
-        lock_conn.commit()     # the lock belongs to the session, not the transaction: keep it, end the transaction
-        if not got_lock:
-            print("Another TiDES run (ingest or sync_ostd) holds the run lock: doing nothing this time.")
+        # Busy lock: a healthy run is in progress -> do nothing (Completed). Stuck holder -> raise.
+        if not tides_db.take_run_lock(lock_conn, 'tides-ingest'):
             return None
         try:
             # 1. Each survey on its own: Kafka -> DB transaction -> commit offsets
@@ -555,16 +561,23 @@ def run_target_workflow(connect_db=True, test_mode=False):
 
             # 3. 4MOST sync always runs (it works from tides_master, not from this run's alerts)
             try:
-                newTransients, updatedTransients, deactivatedTransients = fourmost_sync.sync_pending_to_4most(engine, fourmost_mode)
+                newTransients, updatedTransients, deactivatedTransients, fourmost_down = \
+                    fourmost_sync.sync_pending_to_4most(engine, fourmost_mode)
+                if fourmost_down:
+                    # Nothing is lost (rows stay pending), but a run that could not reach 4MOST
+                    # (outage, or credentials refused: 401/403) must not look green.
+                    failed.append('4most_unreachable')
             except Exception:
                 failed.append('4most_sync')
                 print(f"!!! 4MOST sync FAILED\n{traceback.format_exc()}")
         finally:
-            lock_conn.execute(sqlalchemy.text("SELECT pg_advisory_unlock(:k)"), {'k': TIDES_RUN_LOCK_KEY})
-            lock_conn.commit()
+            tides_db.release_run_lock(lock_conn)
 
     print("Generating report...")
-    ingest_report(newTransients, updatedTransients, deactivatedTransients)
+    try:
+        ingest_report(newTransients, updatedTransients, deactivatedTransients)
+    except Exception:
+        print(f"Report artifact not written (the run itself is unaffected):\n{traceback.format_exc()}")
     if failed:
         raise RuntimeError(f"These steps failed (the others completed): {failed}")
 

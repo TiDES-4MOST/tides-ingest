@@ -4,3 +4,16 @@
 .opr4
 implementation_plans/
 *.pdf
+# Fact-gathering output and real environment files (they hold host names, IPs or secrets; the repo is public)
+deploy-facts/collect-*
+deploy/**/.env
+*.env
+!.env.example
+# SSH keys and anything else private must never be committed (the repo is public)
+*.pem
+*.key
+id_rsa*
+id_ed25519*
+# deploy-facts/ holds only collect.sh; everything else there is local output
+deploy-facts/*
+!deploy-facts/collect.sh

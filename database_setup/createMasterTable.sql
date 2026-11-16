@@ -1,3 +1,5 @@
+-- q3c (spatial matching) must exist before the q3c index below. Needs a superuser (the admin running setupDB.sh).
+CREATE EXTENSION IF NOT EXISTS q3c;
 -- Create the tides_master table
 CREATE TABLE IF NOT EXISTS tides_master(
     tides_id BIGSERIAL PRIMARY KEY,

@@ -1,49 +1,73 @@
-# Welcome to your prefect.yaml file! You can use this file for storing and managing
-# configuration for deploying your flows. We recommend committing this file to source
-# control along with your flow code.
+# prefect.yaml: how the TiDES flows are built and deployed (Prefect 3.6.11).
+#
+# Deploy ONLY with deploy/deploy.sh: it checks the settings below, refuses uncommitted code (the image
+# tag is the commit), and then runs `prefect deploy --all`. Full guide: deploy/README.md.
+#
+# Values that depend on the host come from environment variables at deploy time (deploy.sh sets
+# or checks them all; nothing secret is stored here or in the image):
+#   GIT_SHA                   image tag + provenance (git_sha on every tides_events / tides_4most_log row)
+#   TIDES_ENV_FILE            absolute path of the production .env on the worker host (mounted read-only)
+#   TIDES_DOCKER_NETWORK      the Docker network of the Prefect server (deploy/prefect-server: prefect_net)
+#   PREFECT_INTERNAL_API_URL  the Prefect API as seen from inside that network (http://server:4200/api)
+# The flow-run containers also inherit the worker's own Prefect settings (PREFECT_API_AUTH_STRING, ...).
+#
+# Deliberately NO deployment concurrency_limit: the PostgreSQL advisory run lock (tides_flows/tides_db.py)
+# already makes overlapping runs impossible and is released when a run dies. Prefect's limit kept its
+# lease in server memory: a Prefect server restart killed the running flow, and an unclean restart could
+# leave the slot taken so that every later run was cancelled.
 
-# Generic metadata about this project
 name: tides-ingest
-prefect-version: 3.6.10
-# ... (metadata remains the same)
+prefect-version: 3.6.11
 
 build:
 - prefect_docker.deployments.steps.build_docker_image:
     id: build_image
-    requires: prefect-docker>=0.3.1
-    image_name: "opr4_ingest"
-    tag: latest
-    dockerfile: auto
-    # REMOVED: push: false (this was causing the TypeError)
+    requires: prefect-docker>=0.7.1
+    image_name: spo_4most_ingest
+    tag: "{{ $GIT_SHA }}"            # one immutable image per commit: roll back by re-deploying an older commit
+    dockerfile: Dockerfile           # pinned base image and a fixed /opt/prefect/tides-ingest (see Dockerfile)
 
-# REMOVE the push section entirely to ensure no push is attempted
-push: null 
+push: null                           # built and run on the same host: no registry
 
 pull:
 - prefect.deployments.steps.set_working_directory:
-    directory: /opt/prefect/tides-ingest
+    directory: /opt/prefect/tides-ingest   # the code reads ./sql_tasks/*.sql relative to this
+
+definitions:
+  job_variables: &job_variables
+    image: "{{ build_image.image }}"
+    image_pull_policy: Never         # the image only exists on this host; never try Docker Hub
+    auto_remove: true                # no exited container left behind per run
+    mem_limit: 3g                    # a runaway run must not starve the Prefect server's database
+    networks:
+    - "{{ $TIDES_DOCKER_NETWORK }}"
+    volumes:
+    # the secrets: mounted read-only at run time, never baked into the image (.dockerignore)
+    - "{{ $TIDES_ENV_FILE }}:/opt/prefect/tides-ingest/.env:ro"
+    env:
+      GIT_SHA: "{{ $GIT_SHA }}"
+      PREFECT_API_URL: "{{ $PREFECT_INTERNAL_API_URL }}"
+      PREFECT_RUNNER_HEARTBEAT_FREQUENCY: "60"   # lets the zombie-run automation mark dead runs Crashed
 
 deployments:
-- name: opr4-deploy
-  version: "0.1"
-  entrypoint: "tides_flows/tides_controller.py:run_target_workflow"
-  # Never two ingest runs at once (the flow also takes a Postgres advisory lock).
-  # A run that finds the slot busy is cancelled rather than queued behind it.
-  concurrency_limit:
-    limit: 1
-    collision_strategy: CANCEL_NEW
+- name: spo_4most-ingest
+  version: "{{ $GIT_SHA }}"
+  description: "TiDES ingest: Lasair Kafka -> TiDES database -> 4MOST (USER_GUIDE.md §3, §7)."
+  entrypoint: tides_flows/tides_controller.py:run_target_workflow
+  schedules:
+  - cron: "0 * * * *"                # hourly; runs that find the run lock busy do nothing
+    timezone: UTC
   work_pool:
-    name: opr4
-    job_variables:
-      image: '{{ build_image.image }}'
-      # CRITICAL: This tells the Docker worker to use your local build
-      # instead of trying to pull "opr4_ingest" from Docker Hub.
-      image_pull_policy: "IfNotPresent" 
-      # Secrets: the .env on the worker host is mounted read-only at run time (it is NOT in
-      # the image any more, see .dockerignore). load_dotenv() finds it next to tides_flows/.
-      # Deploy with:  TIDES_ENV_FILE=/abs/path/to/.env GIT_SHA=$(git rev-parse --short=12 HEAD) prefect deploy
-      volumes:
-        - "{{ $TIDES_ENV_FILE }}:/opt/prefect/tides-ingest/.env:ro"
-      env:
-        PREFECT_API_URL: "{{ $PREFECT_SECRET_API }}"
-        GIT_SHA: "{{ $GIT_SHA }}"   # recorded in tides_events / tides_4most_log (.git is not in the image)
+    name: spo_4most
+    job_variables: *job_variables
+
+- name: spo_4most-ostd-sync
+  version: "{{ $GIT_SHA }}"
+  description: "Copy 4MOST's OSTD ids back into tides_master (read-only towards 4MOST, USER_GUIDE.md §8.5)."
+  entrypoint: db_4MOST_tasks/sync_ostd.py:sync_ostd_flow
+  schedules:
+  - cron: "30 16 * * *"              # daily, after OpSys's ingestion at ca. 15:00 German local time
+    timezone: UTC
+  work_pool:
+    name: spo_4most
+    job_variables: *job_variables

@@ -31,4 +31,5 @@ for f in migrations/*.sql; do
     echo "  applying:        $v"
     "${PSQL[@]}" --single-transaction -f "$f" -c "INSERT INTO schema_migrations (version) VALUES ('$v');"
 done
-echo "Done."
+echo "Done. If this database is new, or a migration added tables, (re)apply the roles once:"
+echo "  psql -h $HOST -U $USER -d $NAME -v ON_ERROR_STOP=1 -f roles.sql"

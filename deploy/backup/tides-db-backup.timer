@@ -1,0 +1,12 @@
+[Unit]
+Description=Nightly TiDES database backup
+
+[Timer]
+# 11:15 UTC: after the Chilean observing night, when ingest is quiet (pg_dump never blocks writes anyway).
+# Persistent=true: a backup missed while the VM was down runs right after the next boot.
+OnCalendar=*-*-* 11:15:00 UTC
+Persistent=true
+RandomizedDelaySec=10min
+
+[Install]
+WantedBy=timers.target

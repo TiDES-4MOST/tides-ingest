@@ -1,6 +1,8 @@
 # Pinned to the versions in the working opr4 conda env (Python 3.12), 2026-10-08.
-# Upgrade deliberately: change a pin, run testing/, then deploy.
-prefect==3.6.10
+# Prefect raised to 3.6.11 (2026-10) so that the server, the worker venv and the flow image
+# (Dockerfile: prefecthq/prefect:3.6.11-python3.12) all run the same version.
+# Upgrade deliberately: change a pin, run testing/, then deploy (and the server/Dockerfile together).
+prefect==3.6.11
 prefect-dask==0.3.6
 dask==2025.12.0
 distributed==2025.12.0
@@ -14,5 +16,5 @@ confluent-kafka==2.13.0
 # Note: submit_transients is a local module (not included here)
 python-dotenv==1.2.1
 requests==2.32.5
-# tabulate: optional (nicer Prefect report tables); not installed in opr4, the code falls back to CSV
-tabulate
+# tabulate: optional (nicer Prefect report tables; the code falls back to CSV). Pinned to what the image installs.
+tabulate==0.10.0

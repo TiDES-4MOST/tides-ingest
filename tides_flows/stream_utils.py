@@ -44,6 +44,10 @@ def open_consumer(bootstrap_servers, topic, group_id):
         'group.id': group_id,
         'auto.offset.reset': 'earliest',   # a brand-new group starts at the oldest retained message
         'enable.auto.commit': False,       # we commit ourselves, after the database commit
+        # We stop polling while the batch goes into the database, and commit only afterwards. With
+        # librdkafka's default (300 s) a slow run (big backlog) would be dropped from the group, its
+        # commit would fail, and every following run would re-read the same batch. 1 h = flow timeout.
+        'max.poll.interval.ms': 3600000,
     })
     consumer.subscribe([topic])
     print(f"Connecting to Kafka topic {topic} with group {group_id}...")

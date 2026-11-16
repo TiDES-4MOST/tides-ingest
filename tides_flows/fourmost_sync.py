@@ -17,7 +17,8 @@ Rules:
      That is what stops duplicates (4MOST does not require transient names to be unique).
   3. If a batch POST is rejected (4xx), the items are retried one by one, so one bad row
      cannot block the other 49 forever.
-  4. After 3 consecutive network/server failures we stop talking to 4MOST for this run.
+  4. After 3 consecutive network/server failures we stop talking to 4MOST for this run, and the
+     flow marks the run Failed (sync_pending_to_4most returns fourmost_down=True).
 
 sync_state (NULL = normal):
   ambiguous        POST outcome unknown -> looked up by name before any re-POST (automatic)
@@ -43,6 +44,7 @@ import submit_transients as st
 
 BATCH_SIZE = 50
 TIMEOUT_SECONDS = 60
+MILESTONE_REJECT_BACKOFF_DAYS = 7       # don't repeat a rejected mag PATCH every hour on a shared API
 REJECTED_CODES = {400, 404, 409, 422}   # 4MOST looked at THIS item and said no
 MATCH_RADIUS_ARCSEC = 1.0
 
@@ -298,13 +300,20 @@ def patch_mag_milestones(client, conn):
     Step 5: PATCH mag + mag_type when an active target brightened past 18/17/16/15.
     Nothing is stored to say "a milestone is due": it is recomputed from the data every run
     and stops being due as soon as mag_4most is updated. A rejected milestone PATCH is logged
-    and simply tried again next run (it does not block is_active updates).
+    and does not block is_active updates. It is tried again only after
+    MILESTONE_REJECT_BACKOFF_DAYS (4MOST may refuse mag changes after OSTD ingestion; we must not
+    repeat the same refused request every hour against the shared production API).
     """
     rows = pd.read_sql(text("""
-        SELECT tides_id, name, pk_4most, latest_mags, latest_mjd, mag_4most FROM tides_master
+        SELECT tides_id, name, pk_4most, latest_mags, latest_mjd, mag_4most FROM tides_master tm
         WHERE active AND pk_4most IS NOT NULL AND sync_state IS NULL
           AND (mag_4most IS NULL OR mag_4most > 15)
-        ORDER BY tides_id"""), conn)
+          AND NOT EXISTS (
+              SELECT 1 FROM tides_4most_log l
+              WHERE l.tides_ids @> ARRAY[tm.tides_id]
+                AND l.method = 'PATCH' AND l.outcome = 'rejected' AND l.payload ? 'mag'
+                AND l.request_time > now() - make_interval(days => :backoff_days))
+        ORDER BY tides_id"""), conn, params={'backoff_days': MILESTONE_REJECT_BACKOFF_DAYS})
     conn.commit()
     for row in rows.to_dict('records'):
         update = fp.milestone_mag_update(row)
@@ -328,11 +337,13 @@ def patch_mag_milestones(client, conn):
 def sync_pending_to_4most(engine, mode):
     """
     Runs steps 1-5 above. mode: 'off' (do nothing), 'dry_run' (build + log payloads only), 'live'.
-    Returns (new, updated, deactivated) DataFrames for the ingest report.
+    Returns (new, updated, deactivated, fourmost_down): three DataFrames for the ingest report, and
+    True if the circuit breaker stopped us (4MOST unreachable, 5xx, or credentials refused). Nothing
+    is lost in that case (everything stays pending), but the flow marks the run Failed.
     """
     if mode == 'off':
         print("FOURMOST_MODE=off: not talking to 4MOST.")
-        return pd.DataFrame(), pd.DataFrame(), pd.DataFrame()
+        return pd.DataFrame(), pd.DataFrame(), pd.DataFrame(), False
     with engine.connect() as conn:
         client = FourmostClient(conn, mode)
         if mode == 'live':
@@ -341,9 +352,10 @@ def sync_pending_to_4most(engine, mode):
         created = post_new_targets(client, conn)
         patched = patch_active_flags(client, conn)
         patch_mag_milestones(client, conn)
-        if client.is_down:
+        fourmost_down = client.is_down
+        if fourmost_down:
             print("4MOST looks down (3 consecutive failures): stopped for this run; everything stays pending.")
     patched = pd.DataFrame(patched)
     updated = patched[patched['active']] if len(patched) else patched
     deactivated = patched[~patched['active']] if len(patched) else patched
-    return pd.DataFrame(created), updated, deactivated
+    return pd.DataFrame(created), updated, deactivated, fourmost_down

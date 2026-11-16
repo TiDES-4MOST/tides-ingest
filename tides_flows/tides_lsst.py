@@ -20,10 +20,11 @@ from datetime import datetime
 import stream_utils
 
 LSST_KAFKA = 'lasair-lsst-kafka.lsst.ac.uk:9092'
+REPORT_MAX_ROWS = 50   # rows of the raw batch shown in the Prefect stream report
 LSST_BANDS = ('g', 'r', 'i', 'z')   # u and y are deliberately ignored
 
 @task
-def ingest_report(recentUniqueObjects):
+def ingest_report(recentUniqueObjects, n_total=None):
     """
     Generates a markdown report for the LSST transients.
     
@@ -36,6 +37,8 @@ def ingest_report(recentUniqueObjects):
 
     markdown_report = f"# TiDES LSST Stream Report\n"
     markdown_report += f"**Date:** {date_str}\n\n"
+    if n_total is not None:
+        markdown_report += f"**Objects in this batch:** {n_total} (at most {REPORT_MAX_ROWS} shown)\n\n"
 
     def generate_section(title, data):
         # Check if data is a list (and empty) or None
@@ -65,7 +68,7 @@ def ingest_report(recentUniqueObjects):
     markdown_report += generate_section("LSST Transients", recentUniqueObjects)
 
     # If report is empty (besides header), mention it
-    if len(markdown_report.split('\n')) <= 4:
+    if len(markdown_report.split('\n')) <= 6:
          markdown_report += "_No new transients in this batch._"
 
     # Create the artifact
@@ -107,7 +110,12 @@ def get_latest_batch(consumer, max_messages=20000):
     else:
         recentUniqueObjects = recentObjects
 
-    ingest_report(recentUniqueObjects)
+    # The report is stored in the Prefect database every run: only the first rows, and never let a
+    # failed artifact upload fail the survey (its Kafka offsets would then never be committed).
+    try:
+        ingest_report(recentUniqueObjects.head(REPORT_MAX_ROWS), n_total=len(recentUniqueObjects))
+    except Exception as e:
+        print(f"Stream report artifact not written ({e}); carrying on.")
 
     return recentUniqueObjects
 

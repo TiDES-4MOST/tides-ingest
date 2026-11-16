@@ -8,3 +8,7 @@ __pycache__/
 implementation_plans/
 *.pdf
 .DS_Store
+# Operational files that do not belong in the flow image
+deploy/
+deploy-facts/
+.prefectignore
