@@ -58,3 +58,6 @@ GRANT USAGE, UPDATE ON SEQUENCE tides_seq TO tides_ingest;
 GRANT SELECT ON ALL TABLES IN SCHEMA public TO tides_readonly;
 GRANT SELECT ON ALL SEQUENCES IN SCHEMA public TO tides_readonly;
 ALTER DEFAULT PRIVILEGES IN SCHEMA public GRANT SELECT ON TABLES TO tides_readonly;
+-- pg_dump (the tides_backup login) also reads every sequence: without this, the nightly backup fails
+-- after a migration that adds a sequence, until this file is run again.
+ALTER DEFAULT PRIVILEGES IN SCHEMA public GRANT SELECT ON SEQUENCES TO tides_readonly;

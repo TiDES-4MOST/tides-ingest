@@ -24,12 +24,31 @@ Prefect host                                                      DB host
 | `automations/create_automations.py` | alerts to a Slack/Mattermost webhook, plus marking dead runs Crashed (idempotent) |
 | `backup/tides-db-backup.{sh,service,timer}`, `backup.env.example` | nightly verified dumps with retention, an off-site hook, and an alert on failure |
 | `docker/daemon.json` | Docker log rotation |
+| `docker/after-data-volume.conf` | systemd drop-in: Docker starts after the data volume is mounted |
 | `fstab.example` | data volume by UUID with `nofail` |
+
+## Retiring the old set-up (once, on the current Prefect VM)
+
+The VM still runs the January/OPR4 stack, which holds port 4200 and has the data volume mounted at the
+wrong path (`/mnt/mnt/postgres_tides_ingest_data`, while its Prefect database sits on the root disk).
+Nothing below deletes data.
+
+1. Optional, keep the old run history:
+   `docker exec tides-orchestrate_postgres_1 sh -c 'pg_dump -Fc -U "$POSTGRES_USER" prefect' > ~/prefect-opr4-$(date +%F).dump`
+2. Stop the old stacks (they were started with Compose v1, hence `docker-compose`):
+   `cd ~/tides-orchestrate && docker-compose down`, then `cd ~/tides-test-worker-pool && docker-compose down`.
+3. Free the data volume: `ls -la /mnt/mnt/postgres_tides_ingest_data` (look before reusing it: it holds
+   about 90 MB), then `sudo umount /mnt/mnt/postgres_tides_ingest_data` and delete that line from `/etc/fstab`.
+4. Remove the old run containers: `docker container prune` (414 exited ones, all from the OPR4 deployment).
+
+Then follow the set-up below from step 1.
 
 ## Set-up, in order (first time, or rebuilding the host)
 
 1. **Data volume.** Mount it at `/srv/tides` (`fstab.example`). Create `prefect-postgres/` and `backups/` (700).
-2. **Docker.** Compose v2 (`apt install docker-compose-v2`); copy `docker/daemon.json` to `/etc/docker/daemon.json`; restart Docker.
+2. **Docker.** Compose v2 (`apt install docker-compose-v2`); copy `docker/daemon.json` to `/etc/docker/daemon.json`;
+   copy `docker/after-data-volume.conf` to `/etc/systemd/system/docker.service.d/` (so Docker waits for the
+   data volume at boot); `systemctl daemon-reload && systemctl restart docker`.
 3. **Code and venv.**
    - `git clone … /opt/tides/tides-ingest` (a clean clone, only ever on a pushed commit);
    - `python3 -m venv /opt/tides/venv && /opt/tides/venv/bin/pip install prefect==3.6.11 prefect-docker==0.7.1`;
